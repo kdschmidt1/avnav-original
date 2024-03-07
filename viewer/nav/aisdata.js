@@ -184,7 +184,7 @@ AisData.prototype.handleAisData=function() {
         if (boatPos.valid) {
             this._computeAisTarget(boatPos, ais);
             let warningCpa = globalStore.getData(keys.properties.aisWarningCpa);
-            if (ais.cpa && ais.cpa < warningCpa && ais.tcpa && Math.abs(ais.tcpa) < globalStore.getData(keys.properties.aisWarningTpa)) {
+            if (ais.cpa && ais.cpa < warningCpa && ais.tcpa && ais.tcpa>=0 && Math.abs(ais.tcpa) < globalStore.getData(keys.properties.aisWarningTpa)) {
                 if (aisWarningAis) {
                     if (ais.tcpa >= 0) {
                         if (aisWarningAis.tcpa > ais.tcpa || aisWarningAis.tcpa < 0) aisWarningAis = ais;
