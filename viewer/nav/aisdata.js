@@ -10,6 +10,8 @@ import Requests from '../util/requests.js';
 import base from '../base.js';
 import assign from "object-assign";
 import aisformatter from './aisformatter';
+import AlarmHandler, {LOCAL_TYPES} from '../nav/alarmhandler.js';
+import alarmhandler from "../nav/alarmhandler.js";
 
 
 const AisTarget=navobjects.Ais;
@@ -209,11 +211,14 @@ AisData.prototype.handleAisData=function() {
         }
     }
     if (aisWarningAis) {
-        aisWarningAis.warning = true;
-        this.computedWarningMmsi=aisWarningAis.mmsi;
+    	aisWarningAis.warning = true;
+    	this.computedWarningMmsi=aisWarningAis.mmsi;
+    	if(!alarmhandler.localAlarms[LOCAL_TYPES.AIS])
+    		alarmhandler.startLocalAlarm(LOCAL_TYPES.AIS);
     }
     else{
-        this.computedWarningMmsi=null;
+    	this.computedWarningMmsi=null;
+    	alarmhandler.stopAlarm(LOCAL_TYPES.AIS);
     }
     //handling of the nearest target
     //warning active - this one
