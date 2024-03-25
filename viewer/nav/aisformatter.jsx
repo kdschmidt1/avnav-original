@@ -38,9 +38,18 @@ const aisparam={
         unit: '°',
         classes: [AIS_CLASSES.A,AIS_CLASSES.B]
     },
+    turn: {
+        headline: 'rot(°/min)',
+        format: function (v) {
+            if (v.turn === undefined) return '-';
+            return Formatter.formatDecimal(v.turn,1,0);
+        },
+        unit: '°',
+        classes: [AIS_CLASSES.A,AIS_CLASSES.B]
+    },
     speed: {
         headline: 'speed(kn)',
-            format: function (v) {
+        format: function (v) {
             return Formatter.formatSpeed(v.speed || 0);
         },
         unit: 'kn',
@@ -48,7 +57,7 @@ const aisparam={
     },
     course: {
         headline: 'course',
-            format: function (v) {
+        format: function (v) {
             return Formatter.formatDirection(v.course || 0);
         },
         unit: '°',

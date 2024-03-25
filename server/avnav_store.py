@@ -198,8 +198,7 @@ class AVNStore(object):
       if existing is None:
         existing=AVNStore.AisDataEntry({'mmsi':mmsi},priority)
         self.__aisList[key]=existing
-      else:
-        if existing.priority > priority:
+      elif existing.priority > priority:
           AVNLog.debug("ignore ais for %s due to higher prio %d",mmsi,existing.priority)
           return
       if data.get('type') == '5' or data.get('type') == '24':
@@ -209,7 +208,6 @@ class AVNStore(object):
           v = data.get(k)
           if v is not None:
             existing.value[k] = v
-            existing.timestamp=now
       else:
         AVNLog.debug("merging AIS with existing message")
         newData=data.copy()

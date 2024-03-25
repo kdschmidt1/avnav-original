@@ -1,7 +1,7 @@
 /**
  * Created by andreas on 18.05.14.
  */
-    
+
 import navobjects from '../nav/navobjects';
 import keys, {KeyHelper} from '../util/keys.jsx';
 import globalStore from '../util/globalstore.jsx';
@@ -18,7 +18,7 @@ import cloneDeep from 'clone-deep';
 const DEFAULT_COLOR="#f7c204";
 
 class StyleEntry {
-    constructor(colorStyle,src, style, replaceColor) {
+    constructor(colorStyle, src, style, replaceColor) {
         this.src = src;
         this.style = style;
         this.loaded = false;
@@ -425,32 +425,48 @@ const amul=(arr,fact)=>{
     }
 }
 
-AisLayer.prototype.drawTargetSymbol=function(drawing,xy,current,drawTargetFunction,drawEstimated){
+AisLayer.prototype.drawTargetSymbol=function(drawing,xy,target,drawTargetFunction,drawEstimated){
     let courseVectorTime=globalStore.getData(keys.properties.navBoatCourseTime,0);
     let useCourseVector=globalStore.getData(keys.properties.aisUseCourseVector,false);
+    let curved=globalStore.getData(keys.properties.aisCurvedVectors,false);
+    let rmvRange=globalStore.getData(keys.properties.aisRelativeMotionVectorRange,0);
     let courseVectorWidth=globalStore.getData(keys.properties.navCircleWidth);
     let scale=globalStore.getData(keys.properties.aisIconScale,1);
     let classbShrink=globalStore.getData(keys.properties.aisClassbShrink,1);
-    let useHeading=globalStore.getData(keys.properties.aisUseHeading,false);
-    let rotation=current.course||0;
-    let symbol=this.getStyleEntry(current);
+    let useHeading=globalStore.getData(keys.properties.aisUseHeading,true);
+    let lostTime=globalStore.getData(keys.properties.aisLostTime,0);
+    let minDRspeed=globalStore.getData(keys.properties.aisMinDisplaySpeed,0);
+    // own ship
+    let lat=globalStore.getData(keys.nav.gps.lat,0);
+    let lon=globalStore.getData(keys.nav.gps.lon,0);
+    let cog=globalStore.getData(keys.nav.gps.course,0);
+    let sog=globalStore.getData(keys.nav.gps.speed,0);
+    // ais target
+    let target_cog=target.course||0;
+    let target_sog=target.speed||0;
+    let target_hdg=(useHeading && target.heading!==undefined?target.heading:target.course)||0;
+    let target_rot_sgn=Math.sign(target.turn||0);
+    let target_rot=Math.abs(target.turn||0); // °/min
+    curved = curved && isFinite(target_rot) && target_rot>0.5;
+
+    let symbol=this.getStyleEntry(target);
     let style=cloneDeep(symbol.style);
     if (! symbol.image || ! style.size) return;
     if (style.alpha !== undefined){
         style.alpha=parseFloat(style.alpha);
         if (isNaN(style.alpha)) {
             style.alpha = undefined;
-        }
-        else{
+        }else{
             if (style.alpha < 0) style.alpha=0;
             if (style.alpha > 1) style.alpha=1;
         }
     }
-    if (current.hidden){
+    let hidden = target.hidden || lostTime && target.age>lostTime;
+    if (hidden){
         style.alpha=0.2;
     }
     let now=(new Date()).getTime();
-    if (classbShrink != 1 && AisFormatter.format('clazz',current) === 'B'){
+    if (classbShrink != 1 && AisFormatter.format('clazz',target) === 'B'){
         scale=scale*classbShrink;
     }
     if (scale != 1){
@@ -460,35 +476,74 @@ AisLayer.prototype.drawTargetSymbol=function(drawing,xy,current,drawTargetFuncti
     if (style.rotate !== undefined && ! style.rotate) {
         style.rotation = 0;
         style.rotateWithView=false;
-    }
-    else{
-        if (useHeading && current.heading !== undefined){
-            style.rotation=current.heading * Math.PI/180;
-        }
-        else {
-            style.rotation = rotation * Math.PI / 180;
-        }
+    }else{
+        style.rotation = Helper.radians(target_hdg);
         style.rotateWithView=true;
     }
-    if (drawEstimated && symbol.ghostImage){
-        if ((current.speed||0) >= globalStore.getData(keys.properties.aisMinDisplaySpeed) && current.age > 0){
-            let age=current.age;
-            if (current.receiveTime < now){
-                age+=(now-current.receiveTime)/1000;
+    if(!hidden){
+        let onMap=drawEstimated!==undefined; // true when drawing on map, false in ais info
+
+        var drawArc=function(origin,center,radius,start,angle,style,shift_dir=0,shift_dst=0){
+            // pass origin to mitigate error due to projection for large radii
+            let segments=Math.max(3,Math.ceil(Math.abs(angle)/5));
+            let da=angle/segments, dd=shift_dst/segments;
+            let points=[];
+            for(let i=0; i<=segments; i++){
+                let p=i==0?origin:drawTargetFunction(center,start+i*da,radius);
+                if (shift_dst) p=drawTargetFunction(p,shift_dir,i*dd);
+                points.push(p);
             }
-            let ghostPos=drawTargetFunction(xy,rotation,current.speed*age);
-            drawing.drawImageToContext(ghostPos,symbol.ghostImage,style);
+            drawing.drawLineToContext(points,style);
+        };
+
+        if (curved) {
+            var turn_radius=target_sog/Helper.radians(target_rot)*60; // m, SOG=[m/s]
+            var turn_center=drawTargetFunction(xy,target_cog+target_rot_sgn*90,turn_radius);
+            var turn_angle=Helper.degrees(target_sog*courseVectorTime/turn_radius);
+        }
+
+        if (rmvRange>0 && onMap && style.courseVector !== false) { // relative motion vector
+            let distance=NavCompute.computeDistance({lat:lat,lon:lon},{lat:target.lat,lon:target.lon}).dts/1852;
+            if (distance<=rmvRange && (target_sog || sog)) {
+                if (curved) {
+                    drawArc(xy,turn_center,turn_radius,target_cog-target_rot_sgn*90,target_rot_sgn*turn_angle,
+                            {color:style.courseVectorColor,width:courseVectorWidth,dashed:true},
+                            cog,-sog*courseVectorTime);
+                } else {
+                    let p=drawTargetFunction(xy,target_cog,target_sog*courseVectorTime);
+                    p=drawTargetFunction(p,cog,-sog*courseVectorTime);
+                    drawing.drawLineToContext([xy,p],{color:style.courseVectorColor,width:courseVectorWidth,dashed:true});
+                }
+            }
+        }
+
+        if (useCourseVector && style.courseVector !== false) {
+            if (target_sog) { // true motion vector
+                if(curved && onMap) { // curved TMV
+                    //drawing.drawLineToContext([xy,drawTargetFunction(xy,target_cog+target_rot_sgn*90,100)],{color:"black",width:courseVectorWidth});
+                    drawArc(xy,turn_center,turn_radius,target_cog-target_rot_sgn*90,target_rot_sgn*turn_angle,
+                            {color:style.courseVectorColor,width:courseVectorWidth});
+                } else {
+                    let p=drawTargetFunction(xy,target_cog,target_sog*courseVectorTime);
+                    drawing.drawLineToContext([xy,p],{color:style.courseVectorColor,width:courseVectorWidth});
+                }
+            }
+        }
+
+        if (drawEstimated && symbol.ghostImage && target_sog >= minDRspeed){ // DR position of target
+            let age=target.age+Math.max(0,(now-target.receiveTime)/1000);
+            if (curved) {
+                let a=Helper.degrees(target_sog*age/turn_radius);
+                var pos=drawTargetFunction(turn_center,target_cog-target_rot_sgn*(90-a),turn_radius);
+                //if (style.rotateWithView) { style.rotation+=Helper.radians(target_rot_sgn*a); } // TODO rotate DR icon only
+            } else {
+                var pos=drawTargetFunction(xy,target_cog,target_sog*age);
+            }
+            drawing.drawImageToContext(pos,symbol.ghostImage,style);
         }
     }
     let curpix=drawing.drawImageToContext(xy,symbol.image,style);
-    if (useCourseVector && style.courseVector !== false){
-        let courseVectorDistance=(current.speed !== undefined)?current.speed*courseVectorTime:0;
-        if (courseVectorDistance > 0){
-            let other=drawTargetFunction(xy,rotation,courseVectorDistance);
-            drawing.drawLineToContext([xy,other],{color:style.courseVectorColor,width:courseVectorWidth});
-        }
-    }
-    return {pix:curpix,scale:scale, style: style};
+    return {pix:curpix, scale:scale, style: style};
 };
 
 AisLayer.prototype.computeTextOffsets=function(drawing, target,textIndex, opt_baseOffset,opt_iconScale){

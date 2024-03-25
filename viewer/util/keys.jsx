@@ -338,9 +338,11 @@ let keys={
         aisQueryTimeout: new Property(5000, "AIS (ms)", PropertyType.RANGE, [1000, 10000, 10]), //ms
         aisDistance: new Property(20, "Range(nm)", PropertyType.RANGE, [1, 1000]), //distance for AIS query in nm
         aisUseCourseVector: new Property(true, "use Course Vector", PropertyType.CHECKBOX),
+        aisCurvedVectors: new Property(true, "curved vectors", PropertyType.CHECKBOX),
+        aisRelativeMotionVectorRange: new Property(0, "relative motion vector range (nm)", PropertyType.RANGE, [0, 100]),
         aisShowEstimated: new Property(false,"show estimated position", PropertyType.CHECKBOX),
         aisEstimatedOpacity: new Property(0.4,"estimated image opacity",PropertyType.RANGE,[0.1,1,0.05]),
-        aisUseHeading: new Property(false,"use heading for direction",PropertyType.CHECKBOX),
+        aisUseHeading: new Property(true,"use heading for direction",PropertyType.CHECKBOX),
         aisIconBorderWidth: new Property(3, "Border Width", PropertyType.RANGE, [0, 10]),
         aisIconScale: new Property(1,"Icon Scale",PropertyType.RANGE, [0.5,5,0.1]),
         aisClassbShrink: new Property(0.6,"Class B rel size",PropertyType.RANGE, [0.1,2,0.1]),
@@ -349,6 +351,7 @@ let keys={
         aisListUpdateTime: new Property(5,"update time(s) for list",PropertyType.RANGE,[1,20]),
         aisReducedList: new Property(false,"reduce details in list",PropertyType.CHECKBOX),
         aisHideTime: new Property(15,"hide time(s)",PropertyType.RANGE,[1,3600]),
+        aisLostTime: new Property(600,"lost time (s)",PropertyType.RANGE, [1,3600]),
         aisListLock: new Property(false,"lock ais list",PropertyType.CHECKBOX),
         clickTolerance: new Property(60, "Click Tolerance", PropertyType.RANGE, [10, 120]),
         maxAisErrors: new Property(3), //after that many errors AIS display will be switched off
