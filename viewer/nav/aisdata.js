@@ -1,6 +1,19 @@
 /**
  * Created by andreas on 04.05.14.
  */
+
+
+/**
+ * Working properly if in avnavserver.xml is added: 
+ * <AVNAlarmHandler>
+<!--   legacy way of configuring alarms - still supported but not recommended, use category at least and optionally parameter   -->
+<!--    <Alarm name="AIS" category="info" command="aisAlarm" parameter="aisAlarm.mp3" repeat="1"/>  -->
+<Alarm name="AIS" category="info" sound="aisAlarm.mp3" repeat="1"/>
+<!--   with the next line we configuer a special command that will be called when we receive a "sinking" notification from SignalK
+             the sound is determined by the category - and this is also the parameter that the command will receive   -->
+</AVNAlarmHandler>
+ * 
+ */
 import navobjects from './navobjects';
 import Formatter from '../util/formatter';
 import NavCompute from './navcompute';
