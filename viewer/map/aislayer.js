@@ -606,7 +606,7 @@ AisLayer.prototype.computeTextOffsets=function(drawing, target,textIndex, opt_ba
 			console.log("in flaseeh2-> ",e);
 		}
     AisLayer.prototype.flash3=function(feature,tileLayer) {
-                  const duration = 10000;
+                  const duration = 3000;
                   const start = Date.now();
                   let a=feature.getGeometry();
                   let b=a.clone();
@@ -617,6 +617,7 @@ AisLayer.prototype.computeTextOffsets=function(drawing, target,textIndex, opt_ba
                   function animate(event) {
                     const frameState = event.frameState;
                     const elapsed = frameState.time - start;
+                    const vectorContextx = getVectorContext(event);
                     if (elapsed >= duration) {
                       unByKey(listenerKey);
                       return;
@@ -639,9 +640,9 @@ AisLayer.prototype.computeTextOffsets=function(drawing, target,textIndex, opt_ba
                     });
                     //vectorContext.setStyle(style);
                     //animate_feature.setStyle(style);
-                    const vectorContext2 = toContext(vectorContext);
-                    vectorContext2.setStyle(style);
-                    vectorContext2.drawGeometry(flashGeom);
+                    //const vectorContext2 = toContext(vectorContext);
+                    vectorContextx.setStyle(style);
+                    vectorContextx.drawGeometry(flashGeom);
                     // tell OpenLayers to continue postrender animation
                     self.mapholder.olmap.render();
                   }
@@ -704,11 +705,11 @@ AisLayer.prototype.onPostCompose=function(center,drawing){
             continue;
         }
 
+/*
     						const vector = this.mapholder.getBaseLayer()
         		    const b=vector.values_
     						const source = b.source
     						const duration = 3000;
-
     						function flash3(feature) {
     							const start = Date.now();
     							let a=feature.getGeometry();
@@ -744,7 +745,7 @@ AisLayer.prototype.onPostCompose=function(center,drawing){
     								map.render();
     							}
     						}
-
+*/
         let drawn=this.drawTargetSymbol(drawing,pos,current,this.computeTarget, drawEstimated);
         pixel.push({pixel:drawn.pix,ais:current});
         let textOffsetScale=drawn.scale;
