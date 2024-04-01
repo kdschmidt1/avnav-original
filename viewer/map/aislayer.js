@@ -1,5 +1,5 @@
 /**
- * Created by andreas on 18.05.14.
+ * Created by andreas on 19.05.14.
  */
 
 import navobjects from '../nav/navobjects';
@@ -16,7 +16,7 @@ import atonIcon from '../images/ais-aton.png';
 import cloneDeep from 'clone-deep';
 
 import {easeOut} from 'ol/easing.js';
-import {unByKey} from 'ol/Observable.js';
+import unByKey from 'ol/Observable';
 import {toContext} from 'ol/render.js';
 
 
@@ -33,7 +33,7 @@ import VectorSourceEvent from 'ol/source/Vector.js';
  import Stroke from 'ol/style/Stroke.js';
 import {getVectorContext} from 'ol/render'//ks;
 //import Feature from 'ol/Feature.js';
-//import Map from 'ol/Map.js';
+  import Map from 'ol/Map.js';
 import Point from 'ol/geom/Point.js';
 
 const DEFAULT_COLOR="#f7c204";
@@ -606,11 +606,12 @@ AisLayer.prototype.computeTextOffsets=function(drawing, target,textIndex, opt_ba
 			console.log("in flaseeh2-> ",e);
 		}
     AisLayer.prototype.flash3=function(feature,tileLayer) {
-                  const duration = 3000;
+                  const duration = 4000;
                   const start = Date.now();
                   let a=feature.getGeometry();
                   let b=a.clone();
                   const flashGeom = feature.getGeometry().clone();
+                  console.log("tileLayer.on")
                   const listenerKey = tileLayer.on('postrender', animate);
                   const animate_feature=feature;
 
@@ -619,29 +620,36 @@ AisLayer.prototype.computeTextOffsets=function(drawing, target,textIndex, opt_ba
                     const elapsed = frameState.time - start;
                     const vectorContextx = getVectorContext(event);
                     if (elapsed >= duration) {
-                      unByKey(listenerKey);
+                      //ol.Observable.unByKey(key);
+                      tileLayer.un('postrender', animate);
+                      console.log("tileLayer.off")
+
+                      //ol.Observable.unByKey(key);
+                      //unByKey(listenerKey);
                       return;
                     }
                     //const vectorContext = event.getVectorContext(event);
                     const vectorContext = event.context;
                     const elapsedRatio = elapsed / duration;
                     // radius will be 5 at start and 30 at end.
-                    const radius = (elapsedRatio) * 25 + 5;
-                    const opacity = (1 - elapsedRatio);
+                    const radius = (elapsedRatio) * 49 + 1;
+                    const opacity = 1//(1 - elapsedRatio);
 
                     const style = new Style({
                       image: new CircleStyle({
                         radius: radius,
                         stroke: new Stroke({
                           color: 'rgba(255, 0, 0, ' + opacity + ')',
-                              width: 0.25 + opacity,
+                              width: 5// + opacity,
                         }),
                       }),
                     });
                     //vectorContext.setStyle(style);
                     //animate_feature.setStyle(style);
                     //const vectorContext2 = toContext(vectorContext);
+                    //vectorContext.clearRect(0,0,300,300);
                     vectorContextx.setStyle(style);
+                  console.log("animate")
                     vectorContextx.drawGeometry(flashGeom);
                     // tell OpenLayers to continue postrender animation
                     self.mapholder.olmap.render();
@@ -679,11 +687,11 @@ AisLayer.prototype.onPostCompose=function(center,drawing){
     							self.drawing=drawing;
     							self.pos=pos;
     							let layers=this.mapholder.olmap.getAllLayers();
-    							let layer=layers[layers.length-1];
+    							let layer=layers[7];
     							layer.getSource().on('addfeature', function (e) {
                       // e->VectorSourceEvent addfeature
                     let feature=e.feature;
-    								layer.on('postrender', function (e) {
+    								layer.once('postrender', function (e) {
                       // e->RenderEvent  postrender
     									self.flash3(feature,layer);
     								});       
@@ -693,7 +701,12 @@ AisLayer.prototype.onPostCompose=function(center,drawing){
     							test+=1;
     							const geom = new olPointGeometry(pos);
     								const feature = new olFeature(geom);
-    								layer.getSource().addFeature(feature);
+    								// add feature only if position has changed
+                     if(pos != self.oldpos)
+    								    layer.getSource().addFeature(feature);
+                     self.oldpos=pos
+    								
+   								  console.log("addFeature");
     							}
     						}
 
