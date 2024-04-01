@@ -15,6 +15,27 @@ import tinycolor from "tinycolor2";
 import atonIcon from '../images/ais-aton.png';
 import cloneDeep from 'clone-deep';
 
+import {easeOut} from 'ol/easing.js';
+import {unByKey} from 'ol/Observable.js';
+import {toContext} from 'ol/render.js';
+
+
+import {Polygon as olPolygonGemotery, Point as olPointGeometry} from 'ol/geom';
+import {Map as olMap,View as olView,
+	Feature as olFeature,
+	Point as olPoint,
+} from 'ol';
+import {Vector as olVectorSource, XYZ as olXYZSource} from 'ol/source';
+import VectorSource from 'ol/source/Vector.js';
+import VectorSourceEvent from 'ol/source/Vector.js';
+ import Style from 'ol/style/Style.js';
+ import CircleStyle from 'ol/style/Circle.js';
+ import Stroke from 'ol/style/Stroke.js';
+import {getVectorContext} from 'ol/render'//ks;
+//import Feature from 'ol/Feature.js';
+//import Map from 'ol/Map.js';
+import Point from 'ol/geom/Point.js';
+
 const DEFAULT_COLOR="#f7c204";
 
 class StyleEntry {
@@ -574,6 +595,59 @@ AisLayer.prototype.computeTextOffsets=function(drawing, target,textIndex, opt_ba
     return {offsetX:rt[0],offsetY:rt[1]};
 };
 
+		AisLayer.prototype.flash2=function (e) {
+      
+			let radius = Date.now()%3000;
+			radius/=100;
+			let other = self.computeTarget(self.pos, 0, radius);
+			self.drawing.drawCircleToContext(self.pos, other, {color:"blue",width:2});
+			//self.mapholder.needsRedraw=true;
+
+			console.log("in flaseeh2-> ",e);
+		}
+    AisLayer.prototype.flash3=function(feature,tileLayer) {
+                  const duration = 10000;
+                  const start = Date.now();
+                  let a=feature.getGeometry();
+                  let b=a.clone();
+                  const flashGeom = feature.getGeometry().clone();
+                  const listenerKey = tileLayer.on('postrender', animate);
+                  const animate_feature=feature;
+
+                  function animate(event) {
+                    const frameState = event.frameState;
+                    const elapsed = frameState.time - start;
+                    if (elapsed >= duration) {
+                      unByKey(listenerKey);
+                      return;
+                    }
+                    //const vectorContext = event.getVectorContext(event);
+                    const vectorContext = event.context;
+                    const elapsedRatio = elapsed / duration;
+                    // radius will be 5 at start and 30 at end.
+                    const radius = (elapsedRatio) * 25 + 5;
+                    const opacity = (1 - elapsedRatio);
+
+                    const style = new Style({
+                      image: new CircleStyle({
+                        radius: radius,
+                        stroke: new Stroke({
+                          color: 'rgba(255, 0, 0, ' + opacity + ')',
+                              width: 0.25 + opacity,
+                        }),
+                      }),
+                    });
+                    //vectorContext.setStyle(style);
+                    //animate_feature.setStyle(style);
+                    const vectorContext2 = toContext(vectorContext);
+                    vectorContext2.setStyle(style);
+                    vectorContext2.drawGeometry(flashGeom);
+                    // tell OpenLayers to continue postrender animation
+                    self.mapholder.olmap.render();
+                  }
+                }		
+
+		var self;
 /**
  *
  * @param {olCoordinate} center
@@ -581,6 +655,7 @@ AisLayer.prototype.computeTextOffsets=function(drawing, target,textIndex, opt_ba
  */
 AisLayer.prototype.onPostCompose=function(center,drawing){
     if (! this.visible) return;
+			self=this;
     let i;
     let pixel=[];
     let aisList=globalStore.getData(keys.nav.ais.list,[]);
@@ -588,10 +663,39 @@ AisLayer.prototype.onPostCompose=function(center,drawing){
     let secondLabel=globalStore.getData(keys.properties.aisSecondLabel,'');
     let thirdLabel=globalStore.getData(keys.properties.aisThirdLabel,'');
     let drawEstimated=globalStore.getData(keys.properties.aisShowEstimated,false);
+			self.vector = this.mapholder.getBaseLayer()
+
     for (i in aisList){
         let current=aisList[i];
         let alpha={alpha: current.hidden?0.2:undefined};
         let pos=current.mapPos;
+    					if(current.warning)
+    					{
+    						if (! pos || isNaN(pos[0]) || isNaN(pos[1]))
+    						{}
+    						else
+    						{
+    							self.drawing=drawing;
+    							self.pos=pos;
+    							let layers=this.mapholder.olmap.getAllLayers();
+    							let layer=layers[layers.length-1];
+    							layer.getSource().on('addfeature', function (e) {
+                      // e->VectorSourceEvent addfeature
+                    let feature=e.feature;
+    								layer.on('postrender', function (e) {
+                      // e->RenderEvent  postrender
+    									self.flash3(feature,layer);
+    								});       
+    							});
+
+    							let test=1;
+    							test+=1;
+    							const geom = new olPointGeometry(pos);
+    								const feature = new olFeature(geom);
+    								layer.getSource().addFeature(feature);
+    							}
+    						}
+
         if (! pos){
             pos=this.mapholder.pointToMap((new navobjects.Point(current.lon,current.lat)).toCoord());
             current.mapPos=pos;
@@ -599,6 +703,48 @@ AisLayer.prototype.onPostCompose=function(center,drawing){
         if (! pos || isNaN(pos[0]) || isNaN(pos[1])) {
             continue;
         }
+
+    						const vector = this.mapholder.getBaseLayer()
+        		    const b=vector.values_
+    						const source = b.source
+    						const duration = 3000;
+
+    						function flash3(feature) {
+    							const start = Date.now();
+    							let a=feature.getGeometry();
+    							let b=a.clone();
+    							const flashGeom = feature.getGeometry().clone();
+    							const listenerKey = tileLayer.on('postrender', animate);
+
+    							function animate(event) {
+    								const frameState = event.frameState;
+    								const elapsed = frameState.time - start;
+    								if (elapsed >= duration) {
+    									unByKey(listenerKey);
+    									return;
+    								}
+    								const vectorContext = getVectorContext(event);
+    								const elapsedRatio = elapsed / duration;
+    								// radius will be 5 at start and 30 at end.
+    								const radius = easeOut(elapsedRatio) * 25 + 5;
+    								const opacity = easeOut(1 - elapsedRatio);
+
+    								const style = new Style({
+    									image: new CircleStyle({
+    										radius: radius,
+    										stroke: new Stroke({
+    											color: 'rgba(255, 0, 0, ' + opacity + ')',
+    													width: 0.25 + opacity,
+    										}),
+    									}),
+    								});
+    								vectorContext.setStyle(style);
+    								vectorContext.drawGeometry(flashGeom);
+    								// tell OpenLayers to continue postrender animation
+    								map.render();
+    							}
+    						}
+
         let drawn=this.drawTargetSymbol(drawing,pos,current,this.computeTarget, drawEstimated);
         pixel.push({pixel:drawn.pix,ais:current});
         let textOffsetScale=drawn.scale;

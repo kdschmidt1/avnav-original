@@ -513,43 +513,6 @@ const AisLayer=function(mapholder){
 		return {pix:curpix,scale:scale, style: style};
 	};
 
-	/*
-	let start, previousTimeStamp;
-	let done = false;
-	AisLayer.prototype.step=function(self,drawing, xy) 
-		{
-		drawing.context.clearRect(0,0,radius,radius);
-
-		let radius = Date.now()%3000;
-		radius/=100;
-		let other = self.computeTarget(xy, 0, radius);
-		drawing.drawCircleToContext(xy, other, {color:"blue",width:2});
-		self.mapholder.needsRedraw=true;
-		/*	
-		if (start === undefined) {
-			start = timeStamp;
-		}
-		let elapsed = timeStamp - start;
-
-		if (previousTimeStamp !== timeStamp) {
-			// Math.min() is used here to make sure the element stops at exactly 200px
-			const count = Math.min(0.1 * elapsed, 200);
-			console.log("elapsed",elapsed);
-			console.log("count",count);
-
-			if (count === 200) done = true;
-		}
-
-
-		if (elapsed < 2000) {
-			// Stop the animation after 2 seconds
-			previousTimeStamp = timeStamp;
-			if (!done) {
-				//window.requestAnimationFrame(this.step);
-			}
-		}
-		*/
-
 		AisLayer.prototype.computeTextOffsets=function(drawing, target,textIndex, opt_baseOffset,opt_iconScale){
 			let scale=(opt_iconScale === undefined)?1:opt_iconScale;
 			let rt=[opt_baseOffset?opt_baseOffset[0]:10,opt_baseOffset?opt_baseOffset[1]:0];
@@ -650,12 +613,10 @@ const AisLayer=function(mapholder){
     						}
 
     						const vector = this.mapholder.getBaseLayer()
-        		const b=vector.values_
+        		    const b=vector.values_
     						const source = b.source
-
-
-
     						const duration = 3000;
+
     						function flash3(feature) {
     							const start = Date.now();
     							let a=feature.getGeometry();
