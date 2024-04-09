@@ -603,7 +603,7 @@ AisLayer.prototype.computeTextOffsets=function(drawing, target,textIndex, opt_ba
 			self.drawing.drawCircleToContext(self.pos, other, {color:"blue",width:2});
 			//self.mapholder.needsRedraw=true;
 
-			console.log("in flaseeh2-> ",e);
+			console.log("in flash2-> ",e);
 		}
     AisLayer.prototype.flash3=function(feature,tileLayer) {
                   const duration = 4000;
