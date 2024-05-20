@@ -119,6 +119,23 @@ body{
     background-image: linear-gradient(to right,fade(@colorMain,10), fade(@colorMain,20));
   }
 }
+.iconContainer {
+  position: absolute;
+  right: 1em;
+  top: 1em;
+  z-index: 3;
+
+  .anchorWatchIcon {
+    background-color: red;
+    .maskImage('anchor.svg');
+  }
+
+  .disconnectedIcon {
+    background-color: red;
+    .maskImage('plug-disconnect.svg');
+  }
+}
+
 
 .leftPart{
   .flex(1);
@@ -511,16 +528,15 @@ body{
     .flex-direction(row);
   }
 }
-
+.downloadFrame{
+  width:0;
+  height:0;
+  border:0;
+}
 .LogDialog{
   .logDisplay {
     overflow-y: auto;
     white-space: pre-line;
-  }
-  .downloadFrame{
-    width:0;
-    height:0;
-    border:0;
   }
   max-width: 90vw;
   max-height: 90vh;
@@ -749,6 +765,10 @@ span.valuePrefix{
   .icon();
   background-image: url("@{iconBase}/@{url}");
 }
+.maskImage(@url){
+  .icon();
+  mask-image: url("@{iconBase}/@{url}");
+}
 
 //-- appIcon
 .appIcon{
@@ -917,6 +937,9 @@ span.valuePrefix{
 }
 
 #gpspage{
+  .iconContainer{
+    z-index: 101;
+  }
   .leftPart{
     .flex-direction(row);
     height: 100%;
@@ -1140,7 +1163,7 @@ span.valuePrefix{
   }
 }
 
-#statuspage{
+#statuspage,#importerpage,.importConverterDialog,.importScannerDialog{
   .editIcon {
     margin-left: 1em;
   }
@@ -1187,6 +1210,14 @@ span.valuePrefix{
     .header {
       .nightBackFade(@colorRed);
     }
+  }
+}
+
+#importerpage{
+  .itemInfo {
+    margin-left: 1.5em;
+    padding-left: 3px;
+    .mdText2();
   }
 }
 
@@ -1326,39 +1357,39 @@ span.valuePrefix{
   .appimage{
     .iconImage('apps.svg');
   }
-  .downloadProgress{
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    padding: 1em 1em 1em 1em;
-    background-color: lightgrey;
-    z-index: 10;
-    .flex-display();
-    .nightColors();
-    .progressContainer{
-      .flex(1);
-    }
-    .progressDisplay {
-      margin: 0.5em 0.5em 0.5em 0.5em;
-      height: 2em;
-      display: block;
-      border: 1px solid;
-      margin-left: 1em;
-      margin-bottom: 1em;
-      margin-right: 1em;
-    }
-    .progressInfo{
-      display: block;
-      text-align: center;
-    }
-    .progressDone{
-      height: 100%;
-      .nightBackColor(blue);
-    }
+
+}
+
+.downloadProgress{
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 1em 1em 1em 1em;
+  background-color: lightgrey;
+  z-index: 10;
+  .flex-display();
+  .nightColors();
+  .progressContainer{
+    .flex(1);
   }
-
-
+  .progressDisplay {
+    margin: 0.5em 0.5em 0.5em 0.5em;
+    height: 2em;
+    display: block;
+    border: 1px solid;
+    margin-left: 1em;
+    margin-bottom: 1em;
+    margin-right: 1em;
+  }
+  .progressInfo{
+    display: block;
+    text-align: center;
+  }
+  .progressDone{
+    height: 100%;
+    .nightBackColor(blue);
+  }
 }
 
 .fileDialog{

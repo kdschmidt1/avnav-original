@@ -52,6 +52,7 @@ import time
 import traceback
 import xml.sax as sax
 import xml.sax.saxutils
+import zipfile
 from optparse import OptionParser
 
 from osgeo import osr
@@ -116,6 +117,7 @@ LAYERFILE="layer.xml"
 LAYERBOUNDING="boundings.xml"
 OVERVIEW="avnav.xml"
 BASETILES="basetiles"
+INPUT="input" #for unpacking a zip
 OUTTILES="tiles"
 WORKDIR="work"
 OUT="out"
@@ -1620,9 +1622,28 @@ def convertAux(args,outdir):
       rt.append(name)
   return rt
 
+def unpackZip(targetBase,zipName):
+  opdir=os.path.join(targetBase,os.path.basename(zipName)[0:-4])
+  if os.path.exists(opdir):
+    try:
+      shutil.rmtree(opdir,True)
+    except Exception as e:
+      warn("unable to cleanup %s:%s"%(opdir,str(e)))
+  if not os.path.isdir(opdir):
+    os.makedirs(opdir)
+  if not os.path.isdir(opdir):
+    warn("unable to create %s to unpack %s"%(opdir,zipName))
+    return None
+  try:
+    log("unpacking %s to %s"%(zipName,opdir))
+    zip=zipfile.ZipFile(zipName,"r")
+    zip.extractall(path=opdir)
+  except Exception as e:
+    warn("unable to unpack %s to %s:%s"%(zipName,opdir,e))
+    return None
+  return opdir
  
 def main(argv):
-
   global LISTFILE,layer_zoom_levels,options,MAXUPSCALE,TilerTools,MAXOVERLAP
   usage = "%prog [options] [chartdir or file...]"
   parser = OptionParser(
@@ -1695,6 +1716,7 @@ def main(argv):
   if (len(args) < 1):
     print(usage)
     sys.exit(1)
+  log("starting with %s"%" ".join(argv))
   TilerTools=findTilerTools(options.ttdir)
   mercator=Mercator()
   mode="all"
@@ -1730,31 +1752,42 @@ def main(argv):
     sys.exit(1)
   ld("outname",outname)
   log("using outname %s" %(outname))
-  basetiles = os.path.join(basedir, WORKDIR, outname, BASETILES)
-  outdir = os.path.join(basedir, WORKDIR, outname)
+  outdir = os.path.join(basedir, WORKDIR, os.path.basename(outname))
+  basetiles=os.path.join(outdir,BASETILES)
+  mapdir=os.path.join(outdir,OUTTILES)
+  unpackdir=os.path.join(outdir,INPUT)
+  if not os.path.isabs(outname):
+    outname=os.path.join(basedir,OUT,outname)
+  if not outname.upper().endswith(".GEMF"):
+    outname+=".gemf"
+  tmpgemf=os.path.join(outdir,"tmp.gemf")
   if mode == "chartlist"  or mode == "all":
     if len(args) < 1 :
       log("no charts to convert")
     else:
       if not os.path.isdir(basetiles):
         os.makedirs(basetiles, 0o777)
-      createChartList(args,outdir,mercator)
+      cnvargs=[]
+      for arg in args:
+        if os.path.isfile(arg) and arg.upper().endswith('.ZIP'):
+          arg=unpackZip(unpackdir,arg)
+        if arg is not None:
+          cnvargs.append(arg)
+      createChartList(cnvargs,outdir,mercator)
   if mode == "generate" or mode == "all" or mode == "base":
     assert os.path.isdir(outdir),"the directory "+outdir+" does not exist, run mode chartlist before"
     generateAllBaseTiles(outdir,mercator)
   if mode == "merge" or mode == "all" or mode == "generate" or mode == "overview" or mode == "gemf":
     assert os.path.isdir(outdir),"the directory "+outdir+" does not exist, run mode chartlist before"
-    mapdir=os.path.join(outdir,OUTTILES)
-    if not os.path.isdir(gemfdir):
-      os.makedirs(gemfdir,0o777)
-    gemfname=os.path.join(basedir,OUT,outname+".gemf")
+  copyGemf=False
   if mode == "merge" or mode == "all" or mode == "generate" or mode == "overview":
     if options.newgemf:
-      gemfwriter=WriterGemf(gemfname)
+      gemfwriter=WriterGemf(tmpgemf)
       ld("using new gemfwriting")
     else:
       gemfwriter=None
     mergeAllTiles(outdir,mercator,gemfwriter,(mode == "overview"))
+    copyGemf=True
   if ( mode == "gemf" or mode == "all" ) and not options.newgemf:
     assert os.path.isdir(outdir),"the directory "+outdir+" does not exist, run mode chartlist before"
     chartlist = readChartList(outdir, mercator)
@@ -1763,16 +1796,27 @@ def main(argv):
       marker=os.path.join(mapdir,"avnav.xml")
       doGenerateGemf=True
       if options.update == 1:
-        if os.path.exists(marker) and os.path.exists(gemfname):
-          ostat=os.stat(gemfname)
+        if os.path.exists(marker) and os.path.exists(outname):
+          ostat=os.stat(outname)
           cstat=os.stat(marker)
           if (cstat.st_mtime <= ostat.st_mtime):
-            log("file %s is newer then %s, no need to generate" %(gemfname,marker))
+            log("file %s is newer then %s, no need to generate" %(outname,marker))
             doGenerateGemf=False
       if doGenerateGemf:
-        log("starting creation of GEMF file %s"%(gemfname))
-        generate_efficient_map_file.MakeGEMFFile(mapdir,gemfname,gemfoptions)
-      log("gemf file %s successfully created" % (gemfname))
+        log("starting creation of GEMF file %s"%(tmpgemf))
+        generate_efficient_map_file.MakeGEMFFile(mapdir,tmpgemf,gemfoptions)
+        log("gemf file %s successfully created" % (tmpgemf))
+        copyGemf=True
+  if copyGemf:
+    log("copying %s to %s"%(tmpgemf,outname))
+    outtmp=outname+".tmp"
+    try:
+      shutil.copy(tmpgemf,outtmp)
+      os.replace(outtmp,outname)
+      os.unlink(tmpgemf)
+    except Exception as e:
+      strerr="ERROR: unable to copy/replace %s to %s: %s"%(tmpgemf,outname,traceback.format_exc())
+      raise Exception(strerr)
   log("***chart generation finished***")
 
 

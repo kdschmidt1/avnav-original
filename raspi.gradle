@@ -37,6 +37,7 @@ ospackage {
     requires 'avahi-autoipd'
     requires 'python3-smbus' //could basically also directly go to avnav - but outside rpi there is no use case
     requires('canboat','4.12',Flags.GREATER|Flags.EQUAL).or('base-files','11',Flags.LESS)
+    requires 'jq'
     packageName='avnav-raspi'
     ['common','wlan0','wlan1','wlan-ap','wlan-ap2'].each { String ext->
         configurationFile("/etc/hostapd/hostapd.conf.$ext")
@@ -59,7 +60,6 @@ ospackage {
             include 'rename-interface.sh'
             include 'checkLink.sh'
             include 'uart_control'
-            include 'patchServerConfig.py'
         }
         from('raspberry') {
             include 'avnav_server.xml'
@@ -67,6 +67,10 @@ ospackage {
             include 'ntp.conf'
             include 'avnav.conf'
             fileMode 0644
+        }
+        from('linux'){
+            include 'patchServerConfig.py'
+            fileMode 0755
         }
     }
     into('/usr/lib/avnav/raspberry/xui'){

@@ -298,16 +298,22 @@ class AVNHandlerManager(object):
     raise Exception("handler type %s not found"%tagName)
 
 
-  def readConfigAndCreateHandlers(self,filename):
+  def readConfigAndCreateHandlers(self,filename,allowNoConfig=False):
     AVNLog.info("reading config %s",filename)
     AVNWorker.resetHandlerList()
+    existingConfig=True
     if not os.path.exists(filename):
-      AVNLog.error("unable to read config file %s",filename)
-      return False
+      if not allowNoConfig:
+        AVNLog.error("unable to read config file %s",filename)
+        return False
+      existingConfig=False
     self.cfgfileName=filename
     self.currentCfgFileName=filename
     try:
-      self.parseDomAndCreateHandlers(filename)
+      if not existingConfig:
+        self.createEmptyDom()
+      else:
+        self.parseDomAndCreateHandlers(filename)
     except Exception as e:
       AVNLog.error("error parsing cfg file %s : %s",filename,traceback.format_exc())
       self.parseError=str(e)
@@ -335,7 +341,10 @@ class AVNHandlerManager(object):
   def parseDomAndCreateHandlers(self,filename):
     self.domObject=parser.parse(filename)
     self.parseDomNode(self.domObject.documentElement)
-
+  def createEmptyDom(self):
+    ai = "<AVNServer></AVNServer>"
+    self.domObject=parser.parseString(ai)
+    self.parseDomNode(self.domObject.documentElement)
   def parseDomNode(self,node):
     """
     parse a node from the dom tree
@@ -459,8 +468,9 @@ class AVNHandlerManager(object):
     copyFile=backupFile
     if not os.path.isfile(fallback):
       copyFile=fallback
-    AVNLog.info("creating fallback config file %s",copyFile)
-    self.copyFileWithCheck(self.currentCfgFileName,copyFile)
+    if os.path.exists(self.currentCfgFileName):
+      AVNLog.info("creating fallback config file %s",copyFile)
+      self.copyFileWithCheck(self.currentCfgFileName,copyFile)
     self.houseKeepingCfgFiles()
     tmpName=self.cfgfileName+".tmp"
     if os.path.exists(tmpName):
@@ -474,7 +484,8 @@ class AVNHandlerManager(object):
       parser.parse(tmpName)
     except Exception as e:
       raise Exception("unable to read config after writing it, xml error: %s"%str(e))
-    os.unlink(self.cfgfileName)
+    if os.path.exists(self.cfgfileName):
+      os.unlink(self.cfgfileName)
     try:
       os.rename(tmpName,self.cfgfileName)
     except Exception as e:
@@ -557,12 +568,22 @@ class AVNHandlerManager(object):
       self.shouldStop=True
       return rt
 
-    id = AVNUtil.getHttpRequestParam(requestParam, 'handlerId', mantadory=True)
+    id = AVNUtil.getHttpRequestParam(requestParam, 'handlerId', mantadory=False)
     child = AVNUtil.getHttpRequestParam(requestParam, 'child', mantadory=False)
-    handler = AVNWorker.findHandlerById(int(id))
-    if handler is None:
-        raise Exception("unable to find handler for id %s" % id)
+    configName=AVNUtil.getHttpRequestParam(requestParam,'handlerName',mantadory=False)
     if command == 'getEditables':
+      if id is None and configName is None:
+        return AVNUtil.getReturnData(error="either id or handlerName must be provided")
+      if id is not None:
+        handler = AVNWorker.findHandlerById(int(id))
+        if handler is None:
+          return AVNUtil.getReturnData(error="unable to find handler for %s"%str(id))
+      else:
+        handler=AVNWorker.findHandlerByName(configName,disabled=True)
+        if handler is None:
+          return AVNUtil.getReturnData(error="unable to find handler for %s"%configName)
+        if not handler.preventMultiInstance():
+          return AVNUtil.getReturnData(error="can only find single instance handler by name")
       if child is not None:
         data = handler.getEditableChildParameters(child)
         canDelete = handler.canDeleteChild(child)
@@ -570,11 +591,18 @@ class AVNHandlerManager(object):
         data = handler.getEditableParameters(id=handler.getId())
         canDelete = handler.canDeleteHandler()
       if data is not None:
+          rt['handlerId']=handler.getId()
           rt['data'] = data
           rt['values'] = handler.getParam(child, filtered=True)
           rt['configName'] = handler.getConfigName()
           rt['canDelete'] = canDelete
-    elif command == 'setConfig':
+      return rt
+    if id is None:
+      return AVNUtil.getReturnData(error="missing parameter id")
+    handler = AVNWorker.findHandlerById(int(id))
+    if handler is None:
+      raise Exception("unable to find handler for id %s" % id)
+    if command == 'setConfig':
       values = AVNUtil.getHttpRequestParam(requestParam, '_json', mantadory=True)
       decoded = json.loads(values)
       handler.updateConfig(decoded, child)

@@ -63,11 +63,9 @@
   }
 }
 
-
-
 .iconButton(@icon){
   span {
-    background-image: url("@{iconBase}/@{icon}");
+    .icon(@icon);
   }
 }
 
@@ -108,6 +106,12 @@
       padding-left: 1.3em;
       font-size: 0.9em;
     }
+    &.active {
+      border: 0.3em solid;
+      .nightBorderFade(@colorGreen);
+      padding: 0.2em;
+    }
+
 }
 
 .dialogIconButton(@icon){
@@ -387,6 +391,9 @@ button{
   &.DownloadPageOverlays{
     .iconButton('layers-black.svg');
   }
+  &.DownloadPageImporter{
+    .iconButton('swap_horiz.svg');
+  }
   &.Delete{
     .iconButton('ic_delete.svg');
   }
@@ -508,6 +515,14 @@ button{
   &.log{
     .dialogIconButton('ic_text_snippet.svg');
   }
+  &.autoreload{
+    &.active{
+      .dialogIconButton('update_disabled.svg')
+    }
+    &.inactive{
+      .dialogIconButton('ic_refresh.svg')
+    }
+  }
   .fileDialog &.view{
     .dialogIconButton('visibility.svg');
   }
@@ -623,6 +638,9 @@ button{
   .AnchorWatchDialog &.boat{
     .dialogIconButton('boat.svg')
   }
+  .AnchorWatchDialog &.stop{
+    .dialogIconButton('anchor-end.svg')
+  }
   .RemoteChannelDialog &.disconnect{
     .dialogIconButton('plug-disconnect.svg')
   }
@@ -631,5 +649,14 @@ button{
   }
   .MapWidgetsDialog &.add{
     .dialogIconButton('ic_add.svg')
+  }
+  &.stop{
+    .dialogIconButton('stop_circle.svg')
+  }
+  &.restart{
+    .dialogIconButton('ic_refresh.svg')
+  }
+  &.disable{
+    .dialogIconButton('ic_hide.svg')
   }
 }

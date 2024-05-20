@@ -23,6 +23,66 @@
 #
 ###############################################################################
 
+class ConverterApi:
+  def countConvertibleFiles(self,dirOrFile):
+    '''
+    count the files that can be converted and
+    also compute an md5 hash to check for changes later on
+    AvNav will select the chart converter that is able to convert the highest number of files
+    @param dirOrFile:
+    @return: (num,md5)
+    '''
+    return (0,None)
+  def getConverterCommand(self,input,outname):
+    '''
+    get the command to run the conversion
+    This command will be started as a separate process
+    @param input:
+    @param outname:
+    @return: command line (array)
+    '''
+    raise Exception("not implemented")
+  def getOutFileOrDir(self,outname):
+    '''
+    get the file or directory that contains the result of a successful conversion
+    AvNav will provide a download option.
+    If y directory is provided AvNav will create a zip with all files from this directory
+    @param outname:
+    @return:
+    '''
+    return None
+  def getZipSubDir(self,outname):
+    '''
+    if getOutFileOrDir will return a directory this function will be asked to return
+    a path prefix that will be prepended to the relative pathes of all files that will be zipped
+    If None is returned no prefix will be prepended
+    The default will be to prepend outname
+    @param outname:
+    @return:
+    '''
+    return outname
+  def handledExtensions(self):
+    '''
+    get the list of handled file extensions
+    This will be used by AvNav to already notify the user if an unknown file is select for upload
+    The list should contain the extensions in upper case with the leading "."
+    @return:
+    '''
+    return []
+  def allowSubDir(self):
+    '''
+    does this converter support sub dirs (i.e. multiple files of the announced extensions in one directory)
+    @return:
+    '''
+    return False
+  def getName(self):
+    '''
+    return the name of the converter as it is provided to the user
+    @return:
+    '''
+    return 'unknown'
+
+
 class AVNApi(object):
   """
   the API for handlers/decoders that will input data, decode NMEA or output data
@@ -373,3 +433,19 @@ class AVNApi(object):
     @return:
     '''
     raise NotImplemented()
+
+  def registerConverter(self,converter:ConverterApi,name=None):
+    '''
+    register a chart converter
+    @param converter: a python class that implements the ConverterApi API
+    @param name: if you want to register more then one converter you need to assign different names to each of them
+    @return: None
+    '''
+    raise NotImplemented
+  def deregisterConverter(self,name=None):
+    '''
+    deregister a chartt converter
+    @param name:
+    @return:
+    '''
+    raise NotImplemented

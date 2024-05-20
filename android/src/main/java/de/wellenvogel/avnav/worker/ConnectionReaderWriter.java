@@ -13,6 +13,7 @@ import java.util.regex.Pattern;
 
 import de.wellenvogel.avnav.util.AvnLog;
 import de.wellenvogel.avnav.util.AvnUtil;
+import de.wellenvogel.avnav.util.MovingSum;
 import de.wellenvogel.avnav.util.NmeaQueue;
 
 /**
@@ -32,6 +33,7 @@ public class ConnectionReaderWriter{
         public int writeTimeout=0;
         public String[] blacklist;
         public boolean stripLeading=false;
+        public boolean doNotSendOwn=true;
     }
 
     private static final String LOGPRFX = "ConnectionReaderWriter";
@@ -39,21 +41,29 @@ public class ConnectionReaderWriter{
     private NmeaQueue queue;
     private AbstractConnection connection;
     private ConnectionProperties properties;
-    private boolean dataAvailable = false;
     private String name;
     private int priority=0;
     WriterRunnable writer;
     Thread writerThread;
-    long lastReceived=0;
+    Thread updateThread;
     long queueAge=3000;
-
-    public ConnectionReaderWriter(AbstractConnection connection, String name, int priority, NmeaQueue queue,long queueAge) {
+    String identifier;
+    public static interface StatusUpdater{
+        void update(WorkerStatus.Status status,String info);
+    }
+    StatusUpdater updater;
+    MovingSum receiveCounter=new MovingSum(10);
+    MovingSum sendCount=new MovingSum(10);
+    int queueSkips=0;
+    public ConnectionReaderWriter(AbstractConnection connection, String name, int priority, NmeaQueue queue,long queueAge,StatusUpdater updater) {
         this.connection = connection;
         this.properties = connection.properties;
         this.name = name;
         this.queue = queue;
         this.priority=priority;
         this.queueAge=queueAge;
+        this.updater=updater;
+        this.identifier=name+":"+connection.getId();
     }
 
     class WriterRunnable implements Runnable {
@@ -61,31 +71,23 @@ public class ConnectionReaderWriter{
         public void run() {
             try {
                 OutputStream os = connection.getOutputStream();
-                int sequence = -1;
+                NmeaQueue.Fetcher fetcher=new NmeaQueue.Fetcher(queue, new NmeaQueue.Fetcher.StatusUpdate() {
+                    @Override
+                    public void update(MovingSum received, MovingSum errors) {
+                        sendCount.add(0);
+                        queueSkips= errors.val();
+                    }
+                },200);
+                fetcher.setBlackList(properties.blacklist);
+                if (properties.doNotSendOwn) {
+                    fetcher.setConnectionId(identifier);
+                }
+                fetcher.setFilter(properties.writeFilter);
                 while (!stopped) {
-                    NmeaQueue.Entry e = queue.fetch(sequence, 200,queueAge);
+                    NmeaQueue.Entry e = fetcher.fetch(200,queueAge);
                     if (e != null) {
-                        if (sequence != -1 && e.sequence != (sequence+1)){
-                            AvnLog.d(name,"queue data loss");
-                        }
-                        sequence = e.sequence;
-                        if (!AvnUtil.matchesNmeaFilter(e.data, properties.writeFilter)) {
-                            AvnLog.dfs("ignore %s due to filter",e.data);
-                            continue;
-                        }
-                        if (properties.blacklist != null){
-                            boolean blackListed=false;
-                            for (String bl:properties.blacklist){
-                                if (bl.equals(e.source)){
-                                    AvnLog.dfs("ignore %s due to blacklist entry %s",e.data,bl);
-                                    blackListed=true;
-                                    break;
-                                }
-                            }
-                            if (blackListed) continue;
-                        }
+                        sendCount.add(1);
                         os.write((e.data+"\r\n").getBytes());
-                        dataAvailable=true;
                     }
                 }
             } catch (IOException | InterruptedException e) {
@@ -100,13 +102,12 @@ public class ConnectionReaderWriter{
         }
     }
 
-    boolean hasNmea() {
-        return ! stopped && ! connection.isClosed() && dataAvailable && (System.currentTimeMillis() < (lastReceived+properties.noDataTime*1000));
+    boolean isConnected() {
+        return ! stopped && ! connection.isClosed() ;
     }
 
 
     public void run() throws IOException {
-        dataAvailable=false;
         try {
             startWriter();
         } catch (JSONException e) {
@@ -114,6 +115,46 @@ public class ConnectionReaderWriter{
             stopped = true;
             return;
         }
+        try{
+            if (updateThread != null){
+                updateThread.interrupt();
+            }
+        }catch (Throwable t){}
+        queueSkips=0;
+        sendCount.clear();
+        receiveCounter.clear();
+        updateThread=new Thread(new Runnable() {
+            @Override
+            public void run() {
+                if (updater == null) return;
+                while(true) {
+                    sendCount.add(0);
+                    receiveCounter.add(0);
+                    boolean hasData = sendCount.val() > 0 || receiveCounter.val() > 0;
+                    StringBuilder info = new StringBuilder();
+                    if (properties.readData) {
+                        info.append(String.format("rcv=%.2f/s ", receiveCounter.avg()));
+                    }
+                    if (properties.writeData) {
+                        info.append(String.format("snd=%.2f/s, err=%d/10s", sendCount.avg(), queueSkips));
+                    }
+                    if (!properties.readData && !properties.writeData) {
+                        info.append("inactive");
+                        hasData = false;
+                    }
+                    if (stopped) return;
+                    updater.update(hasData ? WorkerStatus.Status.NMEA : WorkerStatus.Status.INACTIVE,
+                            info.toString());
+                    try {
+                        Thread.sleep(200);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            }
+        });
+        updateThread.setDaemon(true);
+        updateThread.start();
         BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()), 8);
         while (!stopped) {
             try {
@@ -124,7 +165,6 @@ public class ConnectionReaderWriter{
                     break;
                 }
                 if (line.isEmpty()) continue;
-                dataAvailable=true;
                 if (properties.readData) {
                     line = AvnUtil.removeNonNmeaChars(line);
                     if (line.length() < 1){
@@ -145,8 +185,10 @@ public class ConnectionReaderWriter{
                         AvnLog.dfs("ignore %s due to filter",line);
                         continue;
                     }
-                    lastReceived = System.currentTimeMillis();
-                    queue.add(line, name,priority);
+                    receiveCounter.add(1);
+                    NmeaQueue.Entry e=new NmeaQueue.Entry(line,name,priority);
+                    e.connectionId=identifier;
+                    queue.add(e);
                 }
 
             } catch (IOException e) {
@@ -172,6 +214,11 @@ public class ConnectionReaderWriter{
             try{
                 writerThread.interrupt();
             }catch(Throwable t){}
+        }
+        if (updateThread != null){
+            try{
+                updateThread.interrupt();
+            }catch (Throwable t){}
         }
     }
 

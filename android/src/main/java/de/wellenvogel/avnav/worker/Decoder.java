@@ -24,6 +24,7 @@ import net.sf.marineapi.nmea.sentence.Sentence;
 import net.sf.marineapi.nmea.sentence.SentenceValidator;
 import net.sf.marineapi.nmea.sentence.TalkerId;
 import net.sf.marineapi.nmea.sentence.TimeSentence;
+import net.sf.marineapi.nmea.sentence.VDRSentence;
 import net.sf.marineapi.nmea.sentence.VHWSentence;
 import net.sf.marineapi.nmea.sentence.VWRSentence;
 import net.sf.marineapi.nmea.sentence.XDRSentence;
@@ -59,6 +60,18 @@ import de.wellenvogel.avnav.util.NmeaQueue;
  * Created by andreas on 25.12.14.
  */
 public class Decoder extends Worker {
+    private static final String K_SET = "currentSet";
+    private static final String K_DFT = "currentDrift";
+    private static final String K_HDGT = "headingTrue";
+    private static final String K_HDGM = "headingMag";
+    private static final String K_MDEV = "magDeviation";
+    private static final String K_MAGVAR = "magVariation";
+    private static final String K_HDGC = "headingCompass";
+    private static final String K_DEPTHT = "depthBelowTransducer";
+    private static final String K_DEPTHW = "depthBelowWaterline";
+    private static final String K_DEPTHK = "depthBelowKeel";
+    private static final String K_VHWS = "waterSpeed";
+    private static final String K_VWTT = "waterTemp";
     public SimpleDateFormat dateFormat=new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSSZ");
     private long lastAisCleanup=0;
     private AisStore store=null;
@@ -81,9 +94,10 @@ public class Decoder extends Worker {
     public static final EditableParameter.StringParameter OWN_MMSI= new
             EditableParameter.StringParameter("ownMMSI",R.string.labelSettingsOwnMMSI,"");
     private SatStatus satStatus=null;
-    private MovingSum sCounter=new MovingSum(10);
+    private NmeaQueue.Fetcher fetcher;
+
     private void addParameters(){
-        parameterDescriptions.addParams(OWN_MMSI,POSITION_AGE, NMEA_AGE,AIS_AGE,READ_TIMEOUT_PARAMETER, QUEUE_AGE_PARAMETER);
+        parameterDescriptions.addParams(OWN_MMSI,POSITION_AGE, NMEA_AGE,AIS_AGE, QUEUE_AGE_PARAMETER);
     }
     static class AuxiliaryEntry{
         public long timeout;
@@ -267,20 +281,11 @@ public class Decoder extends Worker {
                 }
             }
         }
-        private void updateStatus(MovingSum sCounter,MovingSum eCounter){
-            if (sCounter.shouldUpdate(200)){
-                eCounter.add(0);
-                boolean hasData=sCounter.val()>0;
-                setStatus(hasData?WorkerStatus.Status.NMEA: WorkerStatus.Status.INACTIVE,
-                            String.format("%s NMEA data rcv=%.2f/s,err=%d/10s",hasData?"receiving":"no",sCounter.avg(),eCounter.val()));
-            }
-        }
+
+
         @Override
         public void run(int startSequence) throws JSONException {
             store=new AisStore(OWN_MMSI.fromJson(parameters));
-            int noDataTime=READ_TIMEOUT_PARAMETER.fromJson(parameters)*1000;
-            long lastConnect = 0;
-            int sequence = -1;
             SentenceFactory factory = SentenceFactory.getInstance();
             HashMap<String,AisPacketParser> aisparsers=new HashMap<>();
             Thread cleanupThread=new Thread(new Runnable() {
@@ -304,38 +309,25 @@ public class Decoder extends Worker {
             long auxAge= NMEA_AGE.fromJson(parameters)*1000;
             long posAge= POSITION_AGE.fromJson(parameters) *1000;
             long queueAge = QUEUE_AGE_PARAMETER.fromJson(parameters);
-
-            MovingSum eCounter=new MovingSum(10);
+            fetcher.reset();
             while (!shouldStop(startSequence)) {
                 NmeaQueue.Entry entry;
                 try {
-                    entry = queue.fetch(sequence, 200,queueAge);
+                    entry = fetcher.fetch(200,queueAge);
                 } catch (InterruptedException e) {
                     if (shouldStop(startSequence)) return;
-                    updateStatus(sCounter,eCounter);
                     sleep(2000);
                     continue;
                 }
                 if (shouldStop(startSequence)) return;
-                updateStatus(sCounter,eCounter);
                 if (entry == null) {
                     continue;
                 }
-                if (sequence > 0 && entry.sequence != (sequence+1)){
-                    eCounter.add(entry.sequence-sequence-1);
-                }
-                else{
-                    eCounter.add(0);
-                }
-                sequence = entry.sequence;
                 String line = entry.data;
-                if ((line.startsWith("$") && SentenceValidator.isValid(line)) || line.startsWith("!")){
-                    sCounter.add(1);
-                }
                 try {
                     if (line.startsWith("$")) {
                         //NMEA
-                        if (SentenceValidator.isValid(line)) {
+                        if (entry.validated) {
                             try {
                                 line = correctTalker(line);
                                 Sentence s = factory.createParser(line);
@@ -350,7 +342,7 @@ public class Decoder extends Worker {
                                             getTypeName() ,gsv.getSentenceIndex(),
                                             gsv.getSentenceCount(),gsv.getSatelliteCount());
                                     if (currentGsvStore.getValid()) {
-                                        satStatus=new SatStatus(currentGsvStore.getSatCount(),currentGsvStore.getNumUsed(),sCounter.val() > 0);
+                                        satStatus=new SatStatus(currentGsvStore.getSatCount(),currentGsvStore.getNumUsed(),fetcher.hasData());
                                         currentGsvStore = new GSVStore(locationPriority);
                                         AvnLog.dfs("%s: GSV sentence last, numSat=%d",getTypeName(),satStatus.numSat);
                                     }
@@ -437,12 +429,12 @@ public class Decoder extends Worker {
                                     AvnLog.d("%s: DPT sentence",getTypeName() );
                                     AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
                                     double depth = d.getDepth();
-                                    e.data.put("depthBelowTransducer", depth);
+                                    e.data.put(K_DEPTHT, depth);
                                     double offset = d.getOffset();
                                     if (offset >= 0) {
-                                        e.data.put("depthBelowWaterline", depth + offset);
+                                        e.data.put(K_DEPTHW, depth + offset);
                                     } else {
-                                        e.data.put("depthBelowKeel", depth + offset);
+                                        e.data.put(K_DEPTHK, depth + offset);
                                     }
                                     addAuxiliaryData(s.getSentenceId(), e,posAge);
                                     continue;
@@ -452,7 +444,7 @@ public class Decoder extends Worker {
                                     AvnLog.d("%s: DBT sentence",getTypeName() );
                                     AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
                                     double depth = d.getDepth();
-                                    e.data.put("depthBelowTransducer", depth);
+                                    e.data.put(K_DEPTHT, depth);
                                     addAuxiliaryData(s.getSentenceId(), e,posAge);
                                     continue;
                                 }
@@ -461,7 +453,7 @@ public class Decoder extends Worker {
                                     AvnLog.d("%s: MTW sentence",getTypeName() );
                                     AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
                                     double waterTemp = d.getTemperature() + 273.15;
-                                    e.data.put("waterTemp", waterTemp);
+                                    e.data.put(this.K_VWTT, waterTemp);
                                     addAuxiliaryData(s.getSentenceId(), e,posAge);
                                     continue;
                                 }
@@ -484,7 +476,7 @@ public class Decoder extends Worker {
                                     HDMSentence sh=(HDMSentence)s;
                                     AvnLog.dfs("%s: HDM sentence",getTypeName() );
                                     AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
-                                    e.data.put("headingMag",sh.getHeading());
+                                    e.data.put(K_HDGM,sh.getHeading());
                                     addAuxiliaryData(s.getSentenceId(),e,posAge);
                                     continue;
                                 }
@@ -492,9 +484,25 @@ public class Decoder extends Worker {
                                     HDTSentence sh=(HDTSentence)s;
                                     AvnLog.dfs("%s: %s sentence",getTypeName(),s.getSentenceId() );
                                     AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
-                                    e.data.put("headingTrue",sh.getHeading());
+                                    e.data.put(K_HDGT,sh.getHeading());
                                     addAuxiliaryData(s.getSentenceId(),e,posAge);
                                     continue;
+                                }
+                                if (s instanceof VDRSentence){
+                                    VDRSentence vdr=(VDRSentence) s;
+                                    AvnLog.dfs("%s: %s sentence",getTypeName(),s.getSentenceId() );
+                                    AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
+                                    try{
+                                        double strue=vdr.getTrueDirection();
+                                        e.data.put(K_SET,strue);
+                                    }catch (Exception v1){}
+                                    try{
+                                        double drift=vdr.getSpeed();
+                                        e.data.put(K_DFT,drift);
+                                    }catch (Exception v2){}
+                                    if (e.data.length()>0){
+                                        addAuxiliaryData(s.getSentenceId(),e,posAge);
+                                    }
                                 }
                                 if (s instanceof VHWSentence){
                                     VHWSentence sv=(VHWSentence)s;
@@ -502,15 +510,15 @@ public class Decoder extends Worker {
                                     AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
                                     boolean hasData=false;
                                     try {
-                                        e.data.put("headingMag", sv.getMagneticHeading());
+                                        e.data.put(K_HDGM, sv.getMagneticHeading());
                                         hasData=true;
                                     }catch (Exception sv1){}
                                     try {
-                                        e.data.put("headingTrue", sv.getHeading());
+                                        e.data.put(K_HDGT, sv.getHeading());
                                         hasData=true;
                                     }catch(Exception sv2){}
                                     try {
-                                        e.data.put("waterSpeed", knToMs(sv.getSpeedKnots()));
+                                        e.data.put(K_VHWS, knToMs(sv.getSpeedKnots()));
                                         hasData=true;
                                     }catch(Exception sv3){}
                                     if (hasData) {
@@ -526,18 +534,19 @@ public class Decoder extends Worker {
                                     AvnLog.dfs("%s: %s sentence",getTypeName(),s.getSentenceId() );
                                     AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
                                     double heading=sh.getHeading();
+                                    e.data.put(K_HDGC,heading);
                                     try{
-                                        heading+=sh.getDeviation();
+                                        double mDev=sh.getDeviation();
+                                        e.data.put(K_MDEV,mDev);
+                                        heading+=mDev;
+                                        e.data.put(K_HDGM, heading);
                                     }catch (Exception he){}
-                                    e.data.put("headingMag", heading);
-                                    try{
-                                        heading+=sh.getVariation();
-                                        e.data.put("headingTrue",heading);
-                                    }catch(Exception h2e){}
                                     try{
                                         double mVar=sh.getVariation();
-                                        e.data.put("magVariation",mVar);
-                                    }catch (Exception h3e){}
+                                        e.data.put(K_MAGVAR,mVar);
+                                        heading+=mVar;
+                                        e.data.put(K_HDGT,heading);
+                                    }catch(Exception h2e){}
                                     addAuxiliaryData(s.getSentenceId(),e,posAge);
                                     continue;
                                 }
@@ -554,7 +563,7 @@ public class Decoder extends Worker {
                                             try {
                                                 double mvar = rmc.getVariation();
                                                 AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
-                                                e.data.put("magVariation",mvar);
+                                                e.data.put(K_MAGVAR,mvar);
                                                 addAuxiliaryData(s.getSentenceId(),e,posAge);
                                             }catch(Exception re){}
                                         }
@@ -691,6 +700,13 @@ public class Decoder extends Worker {
     Decoder(String name, GpsService ctx, NmeaQueue queue){
         super(name,ctx);
         this.queue=queue;
+        this.fetcher=new NmeaQueue.Fetcher(queue, new NmeaQueue.Fetcher.StatusUpdate() {
+            @Override
+            public void update(MovingSum received, MovingSum errors) {
+                setStatus(fetcher.hasData()? WorkerStatus.Status.NMEA: WorkerStatus.Status.INACTIVE,
+                        fetcher.getStatusString());
+            }
+        },200);
         addParameters();
         status.canEdit=true;
         dateFormat.setTimeZone(TimeZone.getTimeZone("UTC"));
@@ -713,7 +729,7 @@ public class Decoder extends Worker {
 
     SatStatus getSatStatus() {
         SatStatus st=satStatus;
-        if (st == null) st=new SatStatus(0,0, sCounter.val()>0);
+        if (st == null) st=new SatStatus(0,0, fetcher.hasData());
         return st;
     }
 

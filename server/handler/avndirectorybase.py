@@ -37,8 +37,7 @@ from avnav_manager import AVNHandlerManager
 from avnav_nmea import *
 from avnav_worker import *
 from avnav_util import AVNDownload
-
-
+from httpserver import AVNHttpServer
 
 
 class AVNDirectoryListEntry(object):
@@ -150,7 +149,7 @@ class AVNDirectoryHandlerBase(AVNWorker):
     self.lock = threading.Lock()
 
   def startInstance(self, navdata):
-    self.httpServer=self.findHandlerByName('AVNHttpServer')
+    self.httpServer=self.findHandlerByName(AVNHttpServer.getConfigName())
     if self.httpServer is None:
       raise Exception("unable to find AVNHttpServer")
     super().startInstance(navdata)
@@ -430,7 +429,7 @@ class AVNDirectoryHandlerBase(AVNWorker):
     if subPath is None:
       return #not found
     #check for zip files in the path
-    pathParts=subPath.split(os.path.sep)
+    pathParts=subPath.split(os.sep)
     hasZip=False
     for part in pathParts:
       if part.lower().endswith(".zip") or part.lower().endswith(".kmz"):

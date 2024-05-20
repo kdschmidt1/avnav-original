@@ -24,8 +24,8 @@ import de.wellenvogel.avnav.util.NmeaQueue;
  * Created by andreas on 25.12.14.
  */
 public class SocketWriter extends ChannelWorker {
-    private final EditableParameter.StringParameter mdnsNameParameter;
-    private final EditableParameter.BooleanParameter mdnsEnableParameter;
+    private final EditableParameter.StringParameter mdnsNameParameter=MDNS_NAME.clone("avnav-android");
+    private final EditableParameter.BooleanParameter mdnsEnableParameter=MDNS_ENABLED.clone(false);
 
     static class Creator extends WorkerFactory.Creator{
         @Override
@@ -73,10 +73,6 @@ public class SocketWriter extends ChannelWorker {
 
     private SocketWriter(String name, GpsService ctx, NmeaQueue queue) throws JSONException {
         super(name,ctx,queue);
-        EditableParameter.StringParameter filter=FILTER_PARAM.clone("");
-        filter.setConditions(new AvnUtil.KeyValue<Boolean>(READ_DATA_PARAMETER.name,true));
-        mdnsNameParameter=MDNS_NAME.clone("avnav-android");
-        mdnsEnableParameter =MDNS_ENABLED.clone(false);
         parameterDescriptions.addParams(
                 PORT_PARAMETER,
                 ENABLED_PARAMETER,
@@ -86,7 +82,8 @@ public class SocketWriter extends ChannelWorker {
                 SEND_FILTER_PARAM,
                 BLACKLIST_PARAMETER,
                 READ_DATA_PARAMETER,
-                filter,
+                FILTER_PARAM.cloneCondition(READ_DATA_CONDITION),
+                REPLY_RECEIVED_PARAMETER.cloneCondition(READ_DATA_CONDITION),
                 mdnsEnableParameter,
                 mdnsNameParameter
                 );
@@ -100,18 +97,15 @@ public class SocketWriter extends ChannelWorker {
         Thread thread;
         ClientConnection connection;
         Client(ClientConnection connection) throws JSONException {
-            handler=new ConnectionReaderWriter(connection,getSourceName(),getPriority(null),queue,QUEUE_AGE_PARAMETER.fromJson(parameters));
+            handler=new ConnectionReaderWriter(connection, getSourceName(), getPriority(null), queue, QUEUE_AGE_PARAMETER.fromJson(parameters), (st, info) -> status.setChildStatus(connection.getId(),st,info));
             this.connection=connection;
-            this.thread=new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    try{
-                        status.setChildStatus(connection.getId(), WorkerStatus.Status.NMEA,"connected");
-                        handler.run();
-                        status.unsetChildStatus(connection.getId());
-                    }catch (Throwable t){
-                        status.setChildStatus(connection.getId(), WorkerStatus.Status.ERROR,"stoppped with exception "+t.getMessage());
-                    }
+            this.thread=new Thread(() -> {
+                try{
+                    status.setChildStatus(connection.getId(), WorkerStatus.Status.NMEA,"connected");
+                    handler.run();
+                    status.unsetChildStatus(connection.getId());
+                }catch (Throwable t){
+                    status.setChildStatus(connection.getId(), WorkerStatus.Status.ERROR,"stoppped with exception "+t.getMessage());
                 }
             });
             this.thread.setDaemon(true);

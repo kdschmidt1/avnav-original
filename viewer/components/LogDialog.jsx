@@ -29,20 +29,29 @@ import Toast from "./Toast";
 import DB from "./DialogButton";
 import Formatter from "../util/formatter";
 import PropTypes from 'prop-types';
+import GuiHelpers from "../util/GuiHelpers";
 
 export default class LogDialog extends React.Component{
     constructor(props) {
         super(props);
         this.state={
             log:undefined,
-            loading: true
+            loading: true,
+            autoreload: props.autoreload
         };
         this.downloadFrame=null;
         this.mainref=null;
         this.getLog=this.getLog.bind(this);
+        this.timer=new GuiHelpers.lifecycleTimer(this,(seq)=>{
+            if (this.state.autoreload){
+                this.getLog().then(()=>this.timer.startTimer(seq));
+                return;
+            }
+            this.timer.startTimer(seq);
+        },5000,true)
     }
     componentDidMount() {
-        this.getLog();
+        this.getLog().then(()=>{})
     }
     componentDidUpdate(prevProps, prevState, snapshot) {
         if (this.mainref) {
@@ -51,11 +60,12 @@ export default class LogDialog extends React.Component{
     }
 
     getLog(){
-        Requests.getHtmlOrText(this.props.baseUrl, {useNavUrl:false},{
+        return Requests.getHtmlOrText(this.props.baseUrl, {useNavUrl:false},{
             maxBytes:this.props.maxBytes||500000
         })
             .then((data)=>{
                 this.setState({log:data});
+                return data;
             })
             .catch((e)=>Toast(e))
     }
@@ -66,10 +76,18 @@ export default class LogDialog extends React.Component{
                 {this.state.log||''}
             </div>
             <div className="dialogButtons">
+                <DB name="autoreload"
+                    onClick={()=>
+                        this.setState((old)=>{
+                        return {autoreload:!old.autoreload};
+                        })
+                    }
+                    toggle={this.state.autoreload}
+                >Auto</DB>
                 <DB
                     name="download"
                     onClick={()=>{
-                        let name="avnav-"+Formatter.formatDateTime(new Date()).replace(/[: /]/g,'-').replace(/--/g,'-')+".log";
+                        let name=this.props.dlname?this.props.dlname:"avnav-"+Formatter.formatDateTime(new Date()).replace(/[: /]/g,'-').replace(/--/g,'-')+".log";
                         let url=this.props.baseUrl+"&filename="+encodeURIComponent(name);
                         if (this.downloadFrame){
                             this.downloadFrame.src=url;
@@ -105,5 +123,7 @@ export default class LogDialog extends React.Component{
 LogDialog.propTypes={
     baseUrl: PropTypes.string.isRequired,
     title: PropTypes.string,
-    maxBytes: PropTypes.number
+    maxBytes: PropTypes.number,
+    dlname:PropTypes.string,
+    autoreload: PropTypes.bool
 }

@@ -25,6 +25,7 @@
 #  so refer to this BSD licencse also (see ais.py) or omit ais.py 
 ###############################################################################
 import glob
+import io
 import itertools
 import urllib.parse
 
@@ -42,6 +43,7 @@ import datetime
 import math
 import threading
 from math import copysign
+import zipfile
 
 class Enum(set):
     def __getattr__(self, name):
@@ -312,6 +314,13 @@ class AVNUtil(object):
   @classmethod
   def utcnow(cls):
     return cls.datetimeToTsUTC(datetime.datetime.utcnow())
+
+  @classmethod
+  def utctomonotonic(cls,utcts):
+    mn=time.monotonic()
+    un=cls.utcnow()
+    diff=mn-un
+    return utcts+diff
   
   #check if a given position is within a bounding box
   #all in WGS84
@@ -444,7 +453,7 @@ class AVNUtil(object):
     return rt
 
   ais_converters = {
-    "mmsi": int,
+    "mmsi": str,
     "imo_id": int,
     "shiptype": int,
     "type": int,
@@ -488,12 +497,6 @@ class AVNUtil(object):
     try:
       rt["beam"] = rt["to_port"] + rt["to_starboard"]
       rt["length"] = rt["to_bow"] + rt["to_stern"]
-    except: pass
-
-    try:
-        #if rt["type"] in (5,24):
-        if "lat" not in rt:
-            del rt["type"] # remove to keep
     except: pass
 
     return rt
@@ -619,7 +622,7 @@ class AVNUtil(object):
 
   @classmethod
   def clean_filename(cls,filename):
-    replace=['/',os.path.sep]
+    replace=['/',os.sep]
     if filename is None:
       return None
     for r in replace:
@@ -659,13 +662,15 @@ class ChartFile(object):
 
 
 class AVNDownload(object):
-  def __init__(self, filename, size=None, stream=None, mimeType=None,lastBytes=None):
+  def __init__(self, filename, size=None, stream=None, mimeType=None,lastBytes=None,dlname=None,noattach=None):
     self.filename = filename
     self.size = size
     self.originalSize=self.size
     self.stream = stream
     self.mimeType = mimeType
     self.lastBytes=lastBytes
+    self.dlname=dlname
+    self.noattach=noattach
     if self.lastBytes is not None:
       self.lastBytes=int(self.lastBytes)
 
@@ -699,6 +704,113 @@ class AVNDownload(object):
   def fileToAttach(cls,filename):
     #see https://stackoverflow.com/questions/93551/how-to-encode-the-filename-parameter-of-content-disposition-header-in-http
     return 'filename="%s"; filename*=utf-8\'\'%s'%(filename,urllib.parse.quote(filename))
+
+class AVNDownloadError(AVNDownload):
+  def __init__(self, error:str):
+    super().__init__(None)
+    error=error.encode(encoding='utf-8',errors="ignore")
+    self.dlen=len(error)
+    self.stream=io.BytesIO(error)
+    self.stream.seek(0)
+    self.noattach=True
+  def getSize(self):
+    return self.dlen
+
+  def getMimeType(self, handler=None):
+    return "text/plain"
+
+
+class AVNZipDownload(AVNDownload):
+  '''
+  see https://github.com/pR0Ps/zipstream-ng
+  and https://stackoverflow.com/questions/6657820/how-to-convert-an-iterable-to-a-stream
+  '''
+  def zipGenerator(self,path,prefix=None):
+    class WStream(io.RawIOBase):
+      """An unseekable stream for the ZipFile to write to"""
+      def __init__(self):
+        self._buffer = bytearray()
+        self._closed = False
+
+      def close(self):
+        self._closed = True
+
+      def write(self, b):
+        if self._closed:
+          raise ValueError("Can't write to a closed stream")
+        self._buffer += b
+        return len(b)
+      def hasData(self):
+        return len(self._buffer) > 0
+      def readall(self):
+        chunk = bytes(self._buffer)
+        self._buffer.clear()
+        return chunk
+    def iter_files(path):
+      for dirpath, _, files in os.walk(path, followlinks=True):
+        if not files:
+          yield dirpath  # Preserve empty directories
+        for f in files:
+          yield os.path.join(dirpath, f)
+
+    def read_file(path):
+      with open(path, "rb") as fp:
+        while True:
+          buf = fp.read(1024 * 64)
+          if not buf:
+            break
+          yield buf
+    stream = WStream()
+    with zipfile.ZipFile(stream, mode="w",compression=zipfile.ZIP_DEFLATED) as zf:
+      for f in iter_files(path):
+        # Use the basename of the path to set the arcname
+        rpath=os.path.relpath(f, path)
+        arcname = os.path.join(prefix, rpath) if prefix is not None else rpath
+        zinfo = zipfile.ZipInfo.from_file(f, arcname)
+        zinfo.compress_type=zipfile.ZIP_DEFLATED
+
+        # Write data to the zip file then yield the stream content
+        with zf.open(zinfo, mode="w") as fp:
+          if zinfo.is_dir():
+            continue
+          for buf in read_file(f):
+            fp.write(buf)
+            if stream.hasData():
+              yield stream.readall()
+            else:
+              debug=1
+      zf.close()
+    yield stream.readall()
+
+  class IteratorStream(object):
+    def __init__(self, iterable):
+      self.iter = iter(iterable)
+
+    def read(self, size):
+      '''
+      we just ignore the size
+      to avoid double buffering
+      @param size:
+      @return:
+      '''
+      return next(self.iter,None)
+
+  def __init__(self, fileName, baseDir, prefix=None):
+    super().__init__(None,dlname=fileName)
+    self.baseDir=baseDir
+    self.prefix=prefix
+    self.stream=None
+
+  def getSize(self):
+    return None
+
+  def getStream(self):
+    if self.stream is None:
+      self.stream=self.IteratorStream(self.zipGenerator(self.baseDir,self.prefix))
+    return self.stream
+
+  def getMimeType(self, handler=None):
+    return "application/x-zip"
 
 
 class MovingSum:

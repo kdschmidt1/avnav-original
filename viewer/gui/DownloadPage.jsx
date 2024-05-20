@@ -32,6 +32,7 @@ import EditOverlaysDialog, {DEFAULT_OVERLAY_CHARTENTRY} from '../components/Edit
 import {getOverlayConfigName} from "../map/chartsourcebase"
 import PropertyHandler from '../util/propertyhandler';
 import {SaveItemDialog} from "../components/LoadSaveDialogs";
+import ImportDialog, {checkExt, readImportExtensions} from "../components/ImportDialog";
 
 const RouteHandler=NavHandler.getRoutingHandler();
 
@@ -146,59 +147,6 @@ const DownloadItem=(props)=>{
 
 
 
-class ImportDialog extends React.Component{
-    constructor(props){
-        super(props);
-        this.state={
-            subdir:props.subdir,
-            useSubdir:props.subdir?true:false
-        };
-    }
-    render(){
-        return (
-            <React.Fragment>
-                <div className="importDialog flexInner">
-                    <h3 className="dialogTitle">Upload Chart to Importer</h3>
-                    <InputReadOnly
-                        dialogRow={true}
-                        label="name"
-                        value={this.props.name}
-                        />
-                    <Checkbox
-                        dialogRow={true}
-                        label="use set name"
-                        value={this.state.useSubdir}
-                        onChange={(nv)=>this.setState({useSubdir:nv})}
-                        />
-                    {this.state.useSubdir?<Input
-                        dialogRow={true}
-                        label="set name"
-                        value={this.state.subdir}
-                        onChange={(nv)=>{this.setState({subdir:nv})}}
-                        />
-                        :
-                        null}
-
-                    <div className="dialogButtons">
-                        <DB name="cancel"
-                            onClick={()=>{
-                                this.props.cancelFunction();
-                                this.props.closeCallback();
-                            }}
-                        >Cancel</DB>
-                        <DB name="ok"
-                            onClick={()=>{
-                                this.props.okFunction(this.props,this.state.useSubdir?this.state.subdir:undefined);
-                                this.props.closeCallback();
-                            }}
-                            disabled={this.state.useSubdir && !this.state.subdir}
-                            >OK</DB>
-                    </div>
-                </div>
-             </React.Fragment>
-        );
-    }
-}
 
 
 
@@ -215,7 +163,7 @@ class DownloadPage extends React.Component{
             type:type,
             items:[],
             addOns:[],
-            chartImportExtensions:['kap'],
+            chartImportExtensions:[],
             importSubDir:''
         };
         this.checkNameForUpload=this.checkNameForUpload.bind(this);
@@ -226,16 +174,8 @@ class DownloadPage extends React.Component{
         this.fillData();
     }
     componentDidMount() {
-        if (!globalStore.getData(keys.gui.capabilities.uploadImport)) return;
-        Requests.getJson({
-            request:'api',
-            type:'import',
-            command:'extensions'
-        })
-            .then((data)=>{
-                this.setState({chartImportExtensions:data.items});
-            })
-            .catch();
+        readImportExtensions()
+            .then((extList)=>{this.setState({chartImportExtensions:extList})});
     }
 
     componentDidUpdate(prevProps, prevState, snapshot) {
@@ -342,6 +282,13 @@ class DownloadPage extends React.Component{
         let allowTypeChange=! (this.props.options && this.props.options.allowChange === false);
         let rt=[
             this.getButtonParam('DownloadPageCharts','chart'),
+            {
+                name: 'DownloadPageImporter',
+                onClick: ()=>this.props.history.push('importerpage'),
+                storeKeys: {
+                    visible: keys.gui.capabilities.uploadImport
+                }
+            },
             this.getButtonParam('DownloadPageTracks','track'),
             this.getButtonParam('DownloadPageRoutes','route'),
             this.getButtonParam('DownloadPageLayouts','layout'),
@@ -455,17 +402,19 @@ class DownloadPage extends React.Component{
                 let directExtensions=['gemf','mbtiles','xml'];
                 if (directExtensions.indexOf(ext) < 0) {
                     //check for import
-                    let importExtensions=this.state.chartImportExtensions;
-                    if (importExtensions.indexOf(ext)>=0 && ! avnav.android) {
+                    let importConfig=checkExt(ext,this.state.chartImportExtensions);
+                    if (importConfig.allow) {
                         OverlayDialog.dialog((props)=>{
                             return(
                                 <ImportDialog
                                     {...props}
+                                    allowNameChange={true}
+                                    allowSubDir={importConfig.subdir}
                                     okFunction={(props,subdir)=>{
                                         if (subdir !== this.state.importSubDir){
                                             this.setState({importSubDir: subdir});
                                         }
-                                        resolve({name:name,type:'import',uploadParameters:{subdir:subdir}});
+                                        resolve({name:props.name,type:'import',uploadParameters:{subdir:subdir},showImportPage:true});
                                     }}
                                     cancelFunction={()=>reject("canceled")}
                                     name={name}
@@ -580,7 +529,12 @@ class DownloadPage extends React.Component{
                         <UploadHandler
                             local={localDoneFunction !== undefined}
                             type={this.state.type}
-                            doneCallback={localDoneFunction?localDoneFunction:this.fillData}
+                            doneCallback={(param)=>{
+                                if (param.param && param.param.showImportPage){
+                                    this.props.history.push('importerpage');
+                                }
+                                localDoneFunction?localDoneFunction(param):this.fillData(param)
+                            }}
                             errorCallback={(err)=>{if (err) Toast(err);this.fillData();}}
                             uploadSequence={this.state.uploadSequence}
                             checkNameCallback={this.checkNameForUpload}

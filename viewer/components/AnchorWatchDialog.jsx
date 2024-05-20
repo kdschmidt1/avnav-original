@@ -6,7 +6,7 @@ import keys from '../util/keys.jsx';
 import Toast from '../components/Toast.jsx';
 import AlarmHandler from '../nav/alarmhandler.js';
 import RouteEdit from '../nav/routeeditor.js';
-import {Input} from "./Inputs";
+import {Input, InputReadOnly} from "./Inputs";
 import DialogButton from "./DialogButton";
 import assign from "object-assign";
 import MapHolder from '../map/mapholder';
@@ -15,6 +15,14 @@ import NavCompute from "../nav/navcompute";
 
 const activeRoute=new RouteEdit(RouteEdit.MODES.ACTIVE,true);
 
+export const stopAnchorWithConfirm=()=>{
+    return new Promise((resolve,reject)=>{
+        if (activeRoute.anchorWatch() === undefined) reject('inactive');
+        OverlayDialog.confirm("Really stop the anchor watch?")
+            .then(() => resolve(true))
+            .catch((e)=>reject(e));
+    })
+}
 class WatchDialog extends React.Component{
     constructor(props) {
         super(props);
@@ -42,27 +50,37 @@ class WatchDialog extends React.Component{
         return cv;
     }
     render(){
+        let title=this.props.active?"Update Anchor Watch":"Start Anchor Watch";
+        let hasPosition=this.props.position !== undefined;
     return <div className="AnchorWatchDialog flexInner" >
-        <h3 className="dialogTitle">Set Anchor Watch</h3>
-        <Input dialogRow={true}
-               type='number'
-               value={this.state.radius}
-               onChange={(v)=>this.setState({radius:parseFloat(v)})}
-               label="Radius(m)"
-               />
-        <Input dialogRow={true}
-               type="number"
-               value={this.state.distance}
-               onChange={(v)=>this.setState({distance:parseFloat(v)})}
-               label="Distance(m)"
-               />
-        <Input dialogRow={true}
-               type="number"
-               value={this.state.bearing}
-               onChange={(v)=>this.setState({bearing:parseFloat(v)})}
-               label="Bearing(°)"
-        />
+        <h3 className="dialogTitle">{title}</h3>
+        {hasPosition &&
+        <React.Fragment>
+            <Input dialogRow={true}
+                   type='number'
+                   value={this.state.radius}
+                   onChange={(v) => this.setState({radius: parseFloat(v)})}
+                   label="Radius(m)"
+            />
+            <Input dialogRow={true}
+                   type="number"
+                   value={this.state.distance}
+                   onChange={(v) => this.setState({distance: parseFloat(v)})}
+                   label="Distance(m)"
+            />
+            <Input dialogRow={true}
+                   type="number"
+                   value={this.state.bearing}
+                   onChange={(v) => this.setState({bearing: parseFloat(v)})}
+                   label="Bearing(°)"
+            />
+        </React.Fragment>}
+        {!hasPosition && <InputReadOnly
+            label="No Position"
+            dialogRow={true}
+        />}
         < div className="dialogButtons">
+            {hasPosition && <React.Fragment>
             <DialogButton name={'boat'}
                           onClick={()=>{
                               this.props.closeCallback();
@@ -73,6 +91,19 @@ class WatchDialog extends React.Component{
                                   this.props.closeCallback();
                                   this.props.setCallback(this.computeRefPoint(this.state,true));
                               }}>Center</DialogButton>
+            </React.Fragment>}
+            {this.props.active && <DialogButton name={'stop'}
+                                     onClick={() => {
+                                         stopAnchorWithConfirm()
+                                             .then(() => {
+                                                 this.props.stopCallback();
+                                                 this.props.closeCallback();
+                                             })
+                                             .catch(() => {
+                                             })
+
+                                     }}>Stop</DialogButton>
+            }
                 <DialogButton name={'cancel'}
                           onClick={()=>this.props.closeCallback()}
                           >Cancel</DialogButton>
@@ -83,35 +114,57 @@ class WatchDialog extends React.Component{
 
 export const anchorWatchDialog = (overlayContainer)=> {
     let router = NavData.getRoutingHandler();
-    if (activeRoute.anchorWatch() !== undefined) {
-        router.anchorOff();
-        //alarms will be stopped anyway by the server
-        //but this takes some seconds...
-        AlarmHandler.stopAlarm('anchor');
-        AlarmHandler.stopAlarm('gps');
-        return;
-    }
     let pos = NavData.getCurrentPosition();
-    if (!pos) {
+    let isActive=false;
+    if (activeRoute.anchorWatch() !== undefined) {
+        isActive=true;
+    }
+    if (!pos && ! isActive) {
         Toast("no gps position");
         return;
     }
     OverlayDialog.dialog((props)=>{
         return <WatchDialog
             {...props}
+            active={isActive}
+            position={pos}
             setCallback={(values)=>{
+                AlarmHandler.stopAlarm('anchor');
                 router.anchorOn(values.refPoint,values.radius);
+            }}
+            stopCallback={()=>{
+                router.anchorOff();
+                //alarms will be stopped anyway by the server
+                //but this takes some seconds...
+                AlarmHandler.stopAlarm('anchor');
+                AlarmHandler.stopAlarm('gps');
             }}
             />
     })
 };
-
-export default  ()=>{
+export const AnchorWatchKeys={
+    watchDistance:keys.nav.anchor.watchDistance,
+    connected:keys.properties.connectedMode
+};
+export const isWatchActive=(state)=>{
+    if (state === undefined){
+        return activeRoute.anchorWatch() !== undefined;
+    }
+    return state.watchDistance !== undefined;
+};
+export default  (opt_hide)=>{
     return{
         name: "AnchorWatch",
-        storeKeys: {watchDistance:keys.nav.anchor.watchDistance},
+        storeKeys: AnchorWatchKeys,
         updateFunction:(state)=>{
-            return {toggle:state.watchDistance !== undefined}
+            let rt={
+                toggle:isWatchActive(state),
+                visible: state.connected
+            };
+            if (opt_hide){
+                rt.visible= rt.visible && isWatchActive(state);
+            }
+            return rt;
         },
         onClick: ()=>{
             anchorWatchDialog(undefined);

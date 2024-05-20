@@ -31,12 +31,13 @@ import avnav_handlerList
 
 
 class NmeaEntry(object):
-  def __init__(self,data,source=None,omitDecode=False,sourcePriority=NMEAParser.DEFAULT_SOURCE_PRIORITY):
+  def __init__(self,data,source=None,omitDecode=False,sourcePriority=NMEAParser.DEFAULT_SOURCE_PRIORITY,subsource=None):
     self.data=data
     self.source=source
     self.omitDecode=omitDecode
     self.sourcePriority=sourcePriority
     self.timestamp=time.monotonic()
+    self.subsource=subsource
 
 
 
@@ -109,7 +110,7 @@ class AVNQueue(AVNWorker):
 
 
 
-  def addNMEA(self, entry,source=None,addCheckSum=False,omitDecode=False,sourcePriority=NMEAParser.DEFAULT_SOURCE_PRIORITY):
+  def addNMEA(self, entry,source=None,addCheckSum=False,omitDecode=False,sourcePriority=NMEAParser.DEFAULT_SOURCE_PRIORITY,subsource=None):
     """
     add an NMEA record to our internal queue
     @param entry: the record
@@ -128,7 +129,7 @@ class AVNQueue(AVNWorker):
     else:
       if not entry[-2:]=="\r\n":
         entry=entry+"\r\n"
-    nentry=NmeaEntry(entry,source,omitDecode,sourcePriority)
+    nentry=NmeaEntry(entry,source,omitDecode,sourcePriority,subsource=subsource)
     with self.listlock:
       self.sequence+=1
       if len(self.history) >= self.maxlist:
@@ -155,7 +156,8 @@ class AVNQueue(AVNWorker):
                        nmeafilter=None,
                        blackList=None,
                        returnError=False,
-                       maxAge=None):
+                       maxAge=None,
+                       omitsubsource=None):
     '''
     fetch data from the queue
     @param sequence: the last read sequence
@@ -166,6 +168,7 @@ class AVNQueue(AVNWorker):
     @param blackList: a list of source names to be omitted
     @param returnError: return an error flag
     @param maxAge: max age (in s) of the messages, defaults to the configured maxAge
+    @param omitsubsource: if set do not fetch records from this subsource
     @return:
     '''
     seq=0
@@ -182,6 +185,8 @@ class AVNQueue(AVNWorker):
     stop = now + waitTime
     numErrors=0
     def shouldInclude(item: NmeaEntry):
+      if omitsubsource is not None and item.subsource is not None and item.subsource == omitsubsource:
+        return False
       if nmeafilter is not None:
         if not NMEAParser.checkFilter(item.data,nmeafilter):
           return False
@@ -214,7 +219,7 @@ class AVNQueue(AVNWorker):
               numErrors=startSequence-sequence
               startPoint=0
             allowedAge=time.monotonic()-maxAge #maybe better related to return point
-            while self.history[startPoint].timestamp < allowedAge and startPoint < len(self.history):
+            while startPoint < len(self.history) and self.history[startPoint].timestamp < allowedAge:
               numErrors+=1
               startPoint+=1
             if startPoint < len(self.history):
@@ -225,12 +230,16 @@ class AVNQueue(AVNWorker):
               seq=startSequence+startPoint+numrt-1
               rtlist=self.history[startPoint:startPoint+numrt]
               break
+            #if we did not find anything
+            #we start the next time at the topmost sequence+1
+            sequence=self.sequence+1
+            seq=sequence #we return this if nothing found
           if len(rtlist) < 1:
             wait = stop - time.monotonic()
             if wait <= 0:
               break
             self.listlock.wait(wait)
-      except:
+      except Exception as e:
         pass
     if len(rtlist) < 1:
       if returnError:
@@ -286,7 +295,7 @@ class Fetcher:
                maxAge=None,
                returnErrors=False,
                sumKey='received',
-               errorKey='skipped'):
+               ownsubsource=None):
     self._queue=queue
     self._info=infoHandler
     self._maxEntries=maxEntries
@@ -300,15 +309,12 @@ class Fetcher:
     self._sumKey=sumKey
     if sumKey is not None:
       self._nmeaSum=MovingSum()
-    self._errorKey=errorKey
-    if errorKey is not None:
       self._nmeaErrors=MovingSum()
+    self._ownsubsource=ownsubsource
 
   def __del__(self):
     if self._sumKey is not None:
       self._info.deleteInfo(self._sumKey)
-    if self._errorKey is not None:
-      self._info.deleteInfo(self._errorKey)
 
   def updateParam(self,
                   maxEntries=None,
@@ -318,6 +324,7 @@ class Fetcher:
                   blackList=None,
                   maxAge=None,
                   returnErrors=None,
+                  ownsubsource=None
                   ):
     if maxEntries is not None:
       self._maxEntries=maxEntries
@@ -333,6 +340,8 @@ class Fetcher:
       self._returnErrors=returnErrors
     if blackList is not None:
       self._blackList=self._split(blackList)
+    if ownsubsource is not None:
+      self._ownsubsource=ownsubsource if ownsubsource !='' else None
 
   def fetch(self,maxEntries=None,
                        waitTime=None,
@@ -345,7 +354,8 @@ class Fetcher:
       nmeafilter=self._nmeaFilter,
       blackList=self._blackList,
       returnError=True,
-      maxEntries=self._maxEntries if maxEntries is None else maxEntries
+      maxEntries=self._maxEntries if maxEntries is None else maxEntries,
+      omitsubsource=self._ownsubsource
       )
     if self._nmeaErrors is not None:
       self._nmeaErrors.add(numErrors)
@@ -363,20 +373,10 @@ class Fetcher:
     if self._nmeaErrors is not None:
       self._nmeaErrors.clear()
 
-  def reportSum(self,txt=''):
+  def report(self):
     if self._nmeaSum is None:
       return
     if self._nmeaSum.shouldUpdate():
       self._info.setInfo(self._sumKey,
-                  "%s %.4g/s"%(txt,self._nmeaSum.avg()),
+                  "%.4g/s, err=%d/10s"%(self._nmeaSum.avg(), self._nmeaErrors.val()),
                   WorkerStatus.NMEA if self._nmeaSum.val()>0 else WorkerStatus.INACTIVE)
-  def reportErr(self,txt=''):
-    if self._nmeaErrors is None:
-      return
-    if self._nmeaErrors.shouldUpdate():
-      self._info.setInfo(self._errorKey,
-                  "%s %d errors/10s"%(txt,self._nmeaErrors.val()),
-                  WorkerStatus.ERROR if self._nmeaErrors.val()>0 else WorkerStatus.INACTIVE)
-  def report(self):
-    self.reportErr()
-    self.reportSum()

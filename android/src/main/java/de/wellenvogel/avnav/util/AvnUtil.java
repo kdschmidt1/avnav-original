@@ -176,11 +176,11 @@ public class AvnUtil {
     public static InetAddress getLocalHost() throws UnknownHostException {
         InetAddress local=null;
         try {
-            local = InetAddress.getByName("localhost");
+            local = Inet4Address.getByName("localhost");
         }catch(Exception ex){
             AvnLog.e("Exception getting localhost: "+ex);
         }
-        if (local == null) local=InetAddress.getLocalHost();
+        if (local == null) local=Inet4Address.getLocalHost();
         return local;
     }
 
@@ -342,6 +342,10 @@ public class AvnUtil {
             if (rt < 0) rt=360+rt;
         }
         return rhumbLineBearing(start,end);
+    }
+    public static double vmg(Location current,double bearingTo){
+        if (!current.hasBearing() || ! current.hasSpeed()) return 0;
+        return current.getSpeed()*Math.cos(Math.toRadians(bearingTo-current.getBearing()));
     }
 
     public static class KeyValueList extends ArrayList<KeyValue> {

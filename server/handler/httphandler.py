@@ -245,7 +245,7 @@ class AVNHTTPHandler(HTTPWebSocketsHandler):
       self.wfile.write(wbytes)
       AVNLog.ld("nav response",rtj)
     else:
-      raise Exception("empty response")
+      AVNLog.ld("empty response")
 
   def sendJsFile(self,filename,baseUrl,addCode=None):
     '''
@@ -353,7 +353,7 @@ class AVNHTTPHandler(HTTPWebSocketsHandler):
       raise Exception("missing parameter type for api request")
     handler = self.server.getRequestHandler('api', rtype)
     if handler is None:
-      raise Exception("no handler found for request %s", rtype)
+      raise Exception("no handler found for request %s"%rtype)
     rtj = handler.handleApiRequest('api', rtype, requestParam,handler=self)
     if isinstance(rtj, dict) or isinstance(rtj, list):
       rtj = json.dumps(rtj,cls=Encoder)
@@ -503,6 +503,18 @@ class AVNHTTPHandler(HTTPWebSocketsHandler):
       self.wfile.write(buf)
       bToSend -= len(buf)
     fh.close()
+  def writeChunkedStream(self,fh):
+    maxread = 1000000
+    while True:
+      buf = fh.read(maxread)
+      if buf is None or len(buf) == 0:
+        self.wfile.write(b'0\r\n\r\n')
+        fh.close()
+        return
+      l = len(buf)
+      self.wfile.write('{:X}\r\n'.format(l).encode('utf-8'))
+      self.wfile.write(buf)
+      self.wfile.write(b'\r\n')
 
   def writeData(self,data,mimeType):
     self.send_response(200)
@@ -517,19 +529,28 @@ class AVNHTTPHandler(HTTPWebSocketsHandler):
     self.end_headers()
     self.wfile.write(wbytes)
 
-  def writeFromDownload(self,download,filename=None,noattach=False):
-    # type: (AVNDownload, str,bool) -> object or None
+  def writeFromDownload(self,download: AVNDownload,filename:str=None,noattach:bool=False):
     self.send_response(200)
     size = download.getSize()
+    if download.dlname is not None:
+      filename=download.dlname
+    if download.noattach is not None:
+      noattach=download.noattach
     if filename is not None and filename != "" and not noattach:
       self.send_header("Content-Disposition", "attachment; %s"%AVNDownload.fileToAttach(filename))
     self.send_header("Content-type", download.getMimeType(self))
-    self.send_header("Content-Length", size)
+    if size is not None:
+      self.send_header("Content-Length", size)
+    else:
+      self.send_header('Transfer-Encoding', 'chunked')
     self.send_header("Last-Modified", self.date_time_string())
     self.end_headers()
     stream = None
     stream = download.getStream()
-    self.writeStream(size, stream)
+    if size is not None:
+      self.writeStream(size, stream)
+    else:
+      self.writeChunkedStream(stream)
 
   #download requests
   #parameters:
@@ -612,11 +633,15 @@ class AVNHTTPHandler(HTTPWebSocketsHandler):
       if handler is not None:
         AVNLog.debug("found handler for upload request %s:%s"%(type,handler.getConfigName()))
         rt=handler.handleApiRequest("upload",type,requestParam,rfile=self.rfile,flen=rlen,handler=self)
+        if rt.get('status') != 'OK':
+          raise Exception(rt.get('status') or 'no status')
         return json.dumps(rt,cls=Encoder)
       else:
         raise Exception("invalid request %s",type)
     except Exception as e:
-      return json.dumps({'status':str(e)},cls=Encoder)
+      self.send_response(409,str(e))
+      self.end_headers()
+      return None
 
 
   def handleListDir(self,requestParam):
@@ -641,7 +666,7 @@ class AVNHTTPHandler(HTTPWebSocketsHandler):
     rt = {'status': 'OK'}
     if handler is not None:
       AVNLog.debug("found handler for delete request %s:%s" % (type, handler.getConfigName()))
-      handler.handleApiRequest('delete', type, requestParam,handler=self)
+      rt=handler.handleApiRequest('delete', type, requestParam,handler=self)
       return json.dumps(rt,cls=Encoder)
     raise Exception("invalid type %s"%type)
 

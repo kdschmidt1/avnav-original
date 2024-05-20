@@ -56,7 +56,8 @@ class SerialWriter(SerialReader):
                              description='if true, also start a reader')
   P_READFILTER=WorkerParameter('readFilter','', type=WorkerParameter.T_FILTER,
                                condition={P_COMBINED.name:True})
-  P_BLACKLIST=AVNWorker.BLACKLIST_PARAM
+  P_BLACKLIST=AVNWorker.BLACKLIST_PARAM.copy(condition={P_COMBINED.name:True})
+  P_REPLY_RECEIVED=AVNWorker.REPLY_RECEIVED.copy(condition={P_COMBINED.name:True})
   @classmethod
   def getConfigParam(cls):
       rt=list(filter(lambda x: x.name != 'minbaud' ,SerialReader.getConfigParam()))
@@ -64,9 +65,16 @@ class SerialWriter(SerialReader):
           cls.P_COMBINED,
           cls.P_READFILTER,
           cls.P_BLACKLIST,
+          cls.P_REPLY_RECEIVED
           ]
       return rt+ownParam
-    
+
+  def _getSubSourceName(self):
+    return "Serial-{0}".format(self.P_PORT.fromDict(self.param,rangeOrListCheck=False))
+
+  def getName(self):
+    return "SerialWriter-{0}".format(self.P_PORT.fromDict(self.param,rangeOrListCheck=False))
+
   #parameters:
   #param - the config dict
   #navdata - a nav data object (can be none if this reader does not directly write)
@@ -75,9 +83,10 @@ class SerialWriter(SerialReader):
     super().__init__(param, queue, infoHandler, sourceName)
     self._fetcher=Fetcher(queue,infoHandler,
                           nmeaFilter=self.P_FILTER.fromDict(param),
-                          blackList=self.P_BLACKLIST.fromDict(param)+","+sourceName,
+                          blackList=self.P_BLACKLIST.fromDict(param),
                           sumKey='out',
-                          errorKey='out-skipped')
+                          ownsubsource=self._getSubSourceName() if not self.P_REPLY_RECEIVED.fromDict(param) else None)
+
     self.addrmap={}
     #the serial device
     self.buffer=None
@@ -106,7 +115,6 @@ class SerialWriter(SerialReader):
     rtscts=self.P_RTSCTS.fromDict(self.param)
     portname=self.P_PORT.fromDict(self.param,rangeOrListCheck=False)
     timeout=self.P_TIMEOUT.fromDict(self.param)
-    name=self.getName()
     isCombined = self.P_COMBINED.fromDict(self.param)
     modeStr='writer' if not isCombined else 'combined'
     if init:
@@ -138,6 +146,10 @@ class SerialWriter(SerialReader):
   #the run method - just try forever  
   def run(self):
     INAME='device'
+    self._fetcher.updateParam(nmeaFilter=self.P_FILTER.fromDict(self.param),
+                              blackList=self.P_BLACKLIST.fromDict(self.param),
+                              ownsubsource=self._getSubSourceName() if not self.P_REPLY_RECEIVED.fromDict(self.param) else '')
+    self._fetcher.reset()
     threading.current_thread().setName("%s - %s"%(self.getName(),self.param['port']))
     self.device=None
     init=True
@@ -152,7 +164,6 @@ class SerialWriter(SerialReader):
       reader.start()
     while not self.doStop:
       self._fetcher.reset()
-      name=self.getName()
       timeout=self.P_TIMEOUT.fromDict(self.param)
       portname=self.P_PORT.fromDict(self.param,rangeOrListCheck=False)
       porttimeout=timeout*10
@@ -241,7 +252,7 @@ class SerialWriter(SerialReader):
               AVNLog.debug("ignore line %s due to not matching filter",data)
               continue
             nmeaSum.add(1)
-            self.queue.addNMEA(data,source=source,sourcePriority=priority)
+            self.queue.addNMEA(data,source=source,sourcePriority=priority,subsource=self._getSubSourceName())
         else:
           with self.lock:
             self.lock.wait(0.5)

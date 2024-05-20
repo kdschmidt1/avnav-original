@@ -26,10 +26,11 @@ public abstract class SingleConnectionHandler extends ChannelWorker {
                 SOURCENAME_PARAMETER,
                 SOURCE_PRIORITY_PARAMETER,
                 FILTER_PARAM,
-                SEND_DATA_PARAMETER,
-                SEND_FILTER_PARAM.cloneCondition(new AvnUtil.KeyValue<Boolean>(SEND_DATA_PARAMETER.name,true)),
                 READ_TIMEOUT_PARAMETER,
-                BLACKLIST_PARAMETER.cloneCondition(new AvnUtil.KeyValue<Boolean>(SEND_DATA_PARAMETER.name,true)),
+                SEND_DATA_PARAMETER,
+                SEND_FILTER_PARAM.cloneCondition(SEND_DATA_CONDITION),
+                BLACKLIST_PARAMETER.cloneCondition(SEND_DATA_CONDITION),
+                REPLY_RECEIVED_PARAMETER.cloneCondition(SEND_DATA_CONDITION),
                 STRIP_LEADING_PARAMETER,
                 QUEUE_AGE_PARAMETER
         );
@@ -74,7 +75,12 @@ public abstract class SingleConnectionHandler extends ChannelWorker {
                 continue;
             }
             AvnLog.d(LOGPRFX, name + ": connected to " + connection.getId());
-            handler=new ConnectionReaderWriter(connection,getSourceName(),getPriority(null),queue,QUEUE_AGE_PARAMETER.fromJson(parameters));
+            handler=new ConnectionReaderWriter(connection, getSourceName(), getPriority(null), queue, QUEUE_AGE_PARAMETER.fromJson(parameters), new ConnectionReaderWriter.StatusUpdater() {
+                @Override
+                public void update(WorkerStatus.Status status, String info) {
+                    setStatus(status,info);
+                }
+            });
             try {
                 handler.run();
             }catch (Throwable t){
@@ -122,14 +128,9 @@ public abstract class SingleConnectionHandler extends ChannelWorker {
                 return;
             }
         }
-        if ( handler == null || ! handler.hasNmea()){
+        if ( handler == null || ! handler.isConnected()){
             if (status.status == WorkerStatus.Status.NMEA) {
                 setStatus(WorkerStatus.Status.STARTED, "no data timeout");
-            }
-        }
-        if (handler != null && handler.hasNmea()){
-            if (status.status != WorkerStatus.Status.NMEA) {
-                setStatus(WorkerStatus.Status.NMEA, "("+connects+") connected to " + connection.getId());
             }
         }
     }

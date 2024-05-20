@@ -285,7 +285,7 @@ class WorkerStatus(object):
     self.status=status
     self.info=info
     self.name=name
-    self.modified=time.time()
+    self.modified=time.monotonic()
     self.timeout=timeout
     self.id=childId
     self.canDelete=canDelete
@@ -299,18 +299,18 @@ class WorkerStatus(object):
       rt=True
     self.status=status
     self.info=info
-    self.modified=time.time()
+    self.modified=time.monotonic()
     if timeout is not None:
       self.timeout=timeout
     return rt
   def refresh(self,timeout=None):
-    self.modified=time.time()
+    self.modified=time.monotonic()
     if timeout is not None:
       self.timeout=timeout
   def expired(self):
     if self.timeout is None or self.timeout <=0:
       return False
-    now = time.time()
+    now = time.monotonic()
     if now < self.modified or (self.modified + self.timeout) < now:
       return True
     return False
@@ -418,6 +418,8 @@ class AVNWorker(InfoHandler):
                                              description="The priority for this source. If there is data from higher priority sources, values will be ignored in parser")
   FILTER_PARAM=WorkerParameter('filter','',type=WorkerParameter.T_FILTER)
   BLACKLIST_PARAM=WorkerParameter('blackList' , '',description=', separated list of sources we do not send out')
+  REPLY_RECEIVED=WorkerParameter('sendOwn',False,type=WorkerParameter.T_BOOLEAN,
+                         description='send out data that we received on this connection')
 
   handlerListLock=threading.Lock()
   """a base class for all workers
@@ -580,16 +582,17 @@ class AVNWorker(InfoHandler):
     self.configChanger=changer
   def getStatusProperties(self):
     return {}
-  def getInfo(self):
+  def getInfo(self,children=None):
     try:
       st=self.status.copy()
       rta=[]
       for k,v in st.items():
         try:
-          elem=v.toDict()
-          if elem is not None:
-            rta.append(elem)
-        except:
+          if children is None or k in children:
+            elem=v.toDict()
+            if elem is not None:
+              rta.append(elem)
+        except Exception as e:
           pass
       return {'name':self.getStatusName(),'items':rta}
     except:
@@ -615,6 +618,17 @@ class AVNWorker(InfoHandler):
       if self.status.get(name) is not None:
         try:
           del self.status[name]
+        except:
+          pass
+  def cleanupInfo(self,check):
+    toremove=set()
+    with self.__statusLock:
+      for k,v in self.status.items():
+        if not check(k,v):
+          toremove.add(k)
+      for k in toremove:
+        try:
+          del self.status[k]
         except:
           pass
   def getId(self):
@@ -788,10 +802,10 @@ class AVNWorker(InfoHandler):
     '''
     rt=self.NAME_PARAMETER.fromDict(self.param)
     if rt is not None and rt != "":
-      return rt
+      return rt.replace(',','_')
     if defaultSuffix is None:
       defaultSuffix="?"
-    return "%s-%s"%(self.getName(),str(defaultSuffix))
+    return ("%s-%s"%(self.getName(),str(defaultSuffix))).replace(',','_')
 
   def changeConfig(self,name,value):
     if self.param is None:
