@@ -1,0 +1,8 @@
+/*!
+ * fullscreen-polyfill
+ * 1.0.4 - 12/2/2020
+ * https://github.com/nguyenj/fullscreen-polyfill#readme
+ * (c) John Nguyen; MIT License
+ */
+var FullscreenPolyfill=function(){"use strict";var e=["fullscreen","fullscreenEnabled","fullscreenElement","fullscreenchange","fullscreenerror","exitFullscreen","requestFullscreen"],n=["webkitIsFullScreen","webkitFullscreenEnabled","webkitFullscreenElement","webkitfullscreenchange","webkitfullscreenerror","webkitExitFullscreen","webkitRequestFullscreen"],l=["mozFullScreen","mozFullScreenEnabled","mozFullScreenElement","mozfullscreenchange","mozfullscreenerror","mozCancelFullScreen","mozRequestFullScreen"],t=["","msFullscreenEnabled","msFullscreenElement","MSFullscreenChange","MSFullscreenError","msExitFullscreen","msRequestFullscreen"];document||(document={});var u,c=(u=[e[1],n[1],l[1],t[1]].find((function(e){return document[e]})),[e,n,l,t].find((function(e){return e.find((function(e){return e===u}))}))||[]);function r(n,l){document[e[0]]=document[c[0]]||!!document[c[2]]||!1,document[e[1]]=document[c[1]]||!1,document[e[2]]=document[c[2]]||null,document.dispatchEvent(new Event(n),l.target)}return void 0===document[e[1]]&&c.length?(document[e[0]]=document[c[0]]||!!document[c[2]]||!1,document[e[1]]=document[c[1]]||!1,document[e[2]]=document[c[2]]||null,document.addEventListener(c[3],r.bind(document,e[3]),!1),document.addEventListener(c[4],r.bind(document,e[4]),!1),document[e[5]]=function(){return document[c[5]]()},void(Element.prototype[e[6]]=function(){return this[c[6]].apply(this,arguments)})):{}}();
+//# sourceMappingURL=fullscreen.polyfill.js.map
