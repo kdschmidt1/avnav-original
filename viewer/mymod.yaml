@@ -1,0 +1,22 @@
+# nfpm example config file
+#
+# check https://nfpm.goreleaser.com/configuration for detailed usage
+#
+name: "avnav-my-modification"
+arch: "all"
+platform: "linux"
+version: "202404"
+license: "MIT"
+keep_version: true
+section: "default"
+priority: "extra"
+  
+maintainer: "Klaus D. Schmidt <kdschmidt@bluewin.ch>"
+description: |
+  AvNav plugin supplying Sail_Instrument widgets and overlay
+  showing true and apparent wind, tide, laylines
+  and optionally optimal VMC course
+homepage: "https://github.com/kdschmidt1/Sail_Instrument"
+contents:
+  - src: ./build/debug/avnav_*
+    dst: /usr/lib/avnav/viewer/
