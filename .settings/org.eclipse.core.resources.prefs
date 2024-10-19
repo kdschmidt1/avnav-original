@@ -4,3 +4,4 @@ encoding//chartconvert/read_charts.py=utf-8
 encoding//server/avnav_server.py=utf-8
 encoding//server/create_overview.py=utf-8
 encoding//server/gemf_reader.py=utf-8
+encoding//server/handler/pluginhandler.py=utf-8

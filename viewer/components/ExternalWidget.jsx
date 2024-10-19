@@ -63,7 +63,7 @@ export const ExternalWidget =(props)=>{
     const userData=useRef( {
         eventHandler: [],
         triggerRedraw: () => {
-            setUpdateCount(updateCount+1)
+            //setUpdateCount(updateCount+1)
         }
     });
     if (! initialCalled.current && typeof (props.initFunction) === 'function') {
