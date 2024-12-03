@@ -1,2 +1,5 @@
 eclipse.preferences.version=1
+encoding//handler/alarmhandler.py=utf-8
 encoding/avnav_server.py=utf-8
+encoding/avnav_store.py=utf-8
+encoding/avnav_util.py=utf-8
