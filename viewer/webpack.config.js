@@ -41,7 +41,8 @@ module.exports = (env, argv) => {
         {from: './settings', to: 'settings'},
         {context: './demo', from: '*.xml', to: 'demo/'},
         {context: './images', from: 'ais-default*png', to: 'images/'},
-        {context: './images', from: 'ais-aton*png', to: 'images/'}
+        {context: './images', from: 'ais-aton*png', to: 'images/'},
+        {context: './exportmodules', from: '*.js',to:'modules/'}
     ];
     var images = [
         'WebIcon-512.png',
@@ -60,6 +61,7 @@ module.exports = (env, argv) => {
     }
 
     var devtool = "inline-source-map";
+    //var devtool = "source-map";
     var resolveAlias = {};
     resolveAlias['React$'] = __dirname + "/node_modules/react/index.js";
     var cleanOutput=false;
@@ -72,6 +74,7 @@ module.exports = (env, argv) => {
     }
     else{
         resolveAlias['debugSupport.js']=__dirname+"/util/debugSupport.js"
+        //resolveAlias['pmtiles']=__dirname+"/node_modules/pmtiles/src";
     }
 
     var plugins = [
@@ -89,16 +92,31 @@ module.exports = (env, argv) => {
             template: 'static/avnav_viewer.html',
             filename: 'avnav_viewer.html',
             hash: true
-        })
+        }),
     ];
 
+    var babelOptions={
+        presets: ['@babel/preset-react', ["@babel/preset-env",
+            {
+                useBuiltIns: false,
+                debug: true
+            },
+        ]],
+        plugins: [
+            ["prismjs", {
+                "languages": ["javascript", "css", "markup", "json"],
+                "plugins": ["line-numbers"],
+                "theme": "default",
+                "css": false
+            }]
+        ]
+    };
 //console.log(process.env);
 
     var config = {
         target: ['web','browserslist'],  //this way use the same config as babel is using
                                          //find the browserslist in package.json
         entry: {
-
             main: {import: './webpack-main.js', filename: 'avnav_min.js'},
             style: {import: './style/avnav_viewer_new.less'}
         },
@@ -108,7 +126,7 @@ module.exports = (env, argv) => {
             },
             minimize: minify,
             minimizer: [new TerserPlugin({
-                exclude: /user.js/
+                exclude: [/user.mjs/,/user.mjs/]
             })]
         },
         output: {
@@ -122,6 +140,11 @@ module.exports = (env, argv) => {
         module: {
             rules: [
                 {
+                    test: /\.js$/,
+                    enforce: "pre",
+                    use: ["source-map-loader"],
+                },
+                {
                     test: path.join(__dirname,"version.js"),
                     loader: 'val-loader',
                     options: {
@@ -131,30 +154,25 @@ module.exports = (env, argv) => {
 
                 {
                     test: /.jsx$|.js$/,
-                    exclude: /version\.js$/,
+                    exclude: [/version\.js$/, /node_modules\/maplibre-gl/],
                     use: {
                         loader: 'babel-loader',
-                        options:
-                            {
-                                presets: ['@babel/preset-react', ["@babel/preset-env",
-                                    {
-                                        useBuiltIns: false,
-                                        //debug: true
-                                    },
-                                ]],
-                                plugins: [
-                                    ["prismjs", {
-                                        "languages": ["javascript", "css", "markup", "json"],
-                                        "plugins": ["line-numbers"],
-                                        "theme": "default",
-                                        "css": false
-                                    }]
-                                ]
-                            }
+                        options: babelOptions,
+
                     }
 
                 },
-                { test: /\.tsx?$|\.ts$/, loader: 'ts-loader' },
+                {   test: /\.tsx?$|\.ts$/,
+                    //include: path.resolve(__dirname + "/map/maplibre"),
+                    //exclude: /node_modules/,
+                    use: [
+                        {
+                            loader: 'babel-loader',
+                            options: babelOptions
+                        },
+                        'ts-loader'
+                        ]
+                },
 
                 {
                     test: /\.css$/,

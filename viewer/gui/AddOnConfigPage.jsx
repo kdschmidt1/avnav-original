@@ -9,25 +9,32 @@ import Page from '../components/Page.jsx';
 import Mob from '../components/Mob.js';
 import Addons from '../components/Addons.js';
 import UserAppDialog from '../components/UserAppDialog.jsx';
-import assign from "object-assign";
+import {showPromiseDialog} from "../components/OverlayDialog";
+import {avitem, concatsp} from "../util/helper";
+import {useHistory} from "../components/HistoryProvider";
+import {ListItem, ListMainSlot, ListSlot} from "../components/ListItems";
 
 
 const AddonItem=(props)=>{
-    let className="addonItem listEntry";
-    if (props.invalid) className+=" invalid";
-    if (props.className) className+=" "+props.className;
+    const history=useHistory();
     let source=props.source||'user';
     if (props.invalid) source+=", invalid";
     if (props.newWindow === 'true') source+=", new window";
     let url=(props.originalUrl!==undefined)?props.originalUrl:props.url;
     return (
-        <div className={className} onClick={props.onClick}>
-            <img className="appIcon" src={props.icon}/>
-            <div className="itemMain">
-                <div className="info">{url}</div>
-                {props.title && <div className="itemTitle">{props.title}</div>}
+        <ListItem
+            className={concatsp("addonItem",
+                props.invalid?"ivalid":undefined,
+                props.className)}
+            onClick={props.onClick}>
+            <ListSlot icon={{icon:props.icon}}/>
+            <ListMainSlot
+                primary={url}
+                secondary={props.title}
+            >
                 <div className="sourceInfo">{source}</div>
-            </div>
+            </ListMainSlot>
+            <ListSlot >
             {!props.invalid && <Button name="AddonConfigView" className="smallButton"
                                        onClick={(ev) => {
                                            ev.preventDefault();
@@ -36,10 +43,11 @@ const AddonItem=(props)=>{
                                                window.open(props.url, props.name);
                                                return;
                                            }
-                                           props.history.push("addonpage", {addonName: props.name})
+                                           history.push("addonpage", {addonName: props.name})
                                        }
                                        }/>}
-        </div>
+            </ListSlot>
+        </ListItem>
     )
 };
 
@@ -52,7 +60,7 @@ class AddonConfigPage extends React.Component{
             {
                 name: 'AddonConfigPlus',
                 onClick: ()=> {
-                    UserAppDialog.showUserAppDialog({}, {},true)
+                    showPromiseDialog(undefined,UserAppDialog)
                         .then(()=>this.readAddons())
                         .catch(()=>this.readAddons());
                 }
@@ -99,9 +107,12 @@ class AddonConfigPage extends React.Component{
                         history={self.props.history}
                         />
                 }}
-                onItemClick={(item)=>{
+                onItemClick={(ev)=>{
+                    const item=avitem(ev);
                     let itemUrl=(item.originalUrl !== undefined)?item.originalUrl:item.url;
-                    UserAppDialog.showUserAppDialog(assign(item,{url:itemUrl}),{name:item.name},true)
+                    showPromiseDialog(undefined,(props)=>
+                        <UserAppDialog {...props} fixed={{name:item.name}} addon={{...item,url:itemUrl}}/>
+                    )
                         .then(()=>self.readAddons())
                         .catch(()=>self.readAddons());
                 }}

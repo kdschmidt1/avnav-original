@@ -24,35 +24,66 @@
  */
 
 import React from 'react';
-import PropTypes from 'prop-types';
 import {anchorWatchDialog, AnchorWatchKeys} from "./AnchorWatchDialog";
 import keys from '../util/keys';
-import Dynamic from "../hoc/Dynamic";
+import {useStore} from "../hoc/Dynamic";
 import globalstore from "../util/globalstore";
-import OverlayDialog from "./OverlayDialog";
+import {showPromiseDialog} from "./OverlayDialog";
 import globalStore from "../util/globalstore";
+import {ConfirmDialog} from "./BasicDialogs";
+import PropTypes from "prop-types";
+import {reloadPage} from "../util/helper";
+import LeaveHandler from "../util/leavehandler"
+import {useDialogContext} from "./DialogContext";
 
-const TitleIcons=(props)=>{
+export const DynamicTitleIcons=({rightOffset})=>{
+    const dialogContext=useDialogContext();
+    const props=useStore({rightOffset},{storeKeys:
+            {...AnchorWatchKeys,
+                show:keys.properties.titleIcons,
+                measure: keys.map.activeMeasure,
+                mjsUpdates:keys.gui.global.updatedJsModules,
+                unloadedJs:keys.gui.global.unloadedJsChanges,
+            }})
     if (! props.show) return null;
     let cl="iconContainer ";
     if (props.className) cl+=props.className;
     let anchorWatch=props.watchDistance !== undefined;
-    return <div className={cl}>
-        {anchorWatch && <span className="anchorWatchIcon" onClick={() => anchorWatchDialog()}/>}
+    const jsChange=props.mjsUpdates|| props.unloadedJs;
+    const style={};
+    if (rightOffset){
+        style.paddingRight=rightOffset+"px";
+    }
+    return <div className={cl} style={style} onClick={(ev)=>ev.stopPropagation()}>
+        {props.measure && <span className="measureIcon" onClick={()=>{
+            globalStore.storeData(keys.map.activeMeasure,undefined);
+        }}/> }
+        {anchorWatch && <span className="anchorWatchIcon" onClick={() => anchorWatchDialog(dialogContext)}/>}
+        {jsChange && <span className="jsChangeIcon" onClick={()=>{
+            let rltext=props.unloadedJs?
+                "There are changes in plugin java script or user.mjs that are still not loaded.\n"
+                :
+                "Plugin or user.mjs changes have been loaded. To avoid memory leaks you should reload AvNav soon.\n";
+            rltext+="Reload AvNav now?";
+            showPromiseDialog(dialogContext,(dp)=><ConfirmDialog
+                {...dp}
+                title={"Reload?"}
+                text={rltext}
+                />)
+                .then(()=>{
+                    LeaveHandler.stop();
+                    reloadPage();
+                },
+                    ()=>{})
+        }}/>}
         {!props.connected && <span className="disconnectedIcon" onClick={()=>{
             if (globalstore.getData(keys.gui.global.onAndroid) ||  !globalStore.getData(keys.gui.capabilities.canConnect)) return;
-            OverlayDialog.confirm("End disconnected mode?")
+            showPromiseDialog(dialogContext,(props)=><ConfirmDialog {...props} text={"End disconnected mode?"}/>)
                 .then(()=>globalStore.storeData(keys.properties.connectedMode,true))
                 .catch(()=>{});
         }}/>}
     </div>
 }
-export default TitleIcons;
-TitleIcons.propTypes={
-    watchDistance: PropTypes.number,
-    connected: PropTypes.bool,
-    show: PropTypes.bool
+DynamicTitleIcons.propTypes={
+    rightOffset: PropTypes.number
 }
-TitleIcons.storeKeys=Object.assign({},AnchorWatchKeys,{show:keys.properties.titleIcons});
-
-export const DynamicTitleIcons=Dynamic(TitleIcons,{storeKeys:TitleIcons.storeKeys});

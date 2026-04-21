@@ -1,5 +1,6 @@
-import base from '../base.js';
+import base from '../base.ts';
 import remotechannel, {COMMANDS} from "./remotechannel";
+
 
 class Mapping{
     constructor(idx,page,component,action){
@@ -10,31 +11,36 @@ class Mapping{
     }
 }
 
+export const PageKeyMode = {
+    ALL: 'all',
+    NONE: 'none',
+    EXPLICIT: 'explicit'
+}
+
 class KeyHandler{
+    static CONFIG='_config'; //entry at page mappings for config values
+    static CFG_mode='mode'; //config for page mode
     constructor(){
         this.keymappings={};
         this.merges={};
         this.mergeLevels=[];
         this.registrations={};
         this.page=undefined;
+        this.pageConfig={};
         this.ALLPAGES="all";
-        this.enabled=true;
         this.dialogComponents=[]; //components registered here will be handled in dialogs
         this.remoteSubscription=remotechannel.subscribe(COMMANDS.key,(msg)=>{
             this.handleKey(msg);
         })
     }
-    disable(){
-        this.enabled=false;
-    }
-    enable(){
-        this.enabled=true;
-    }
+
     registerDialogComponent(component){
+        if (component === KeyHandler.CONFIG) throw new Error("unable to register component "+component);
         if (this.dialogComponents.indexOf(component)>=0) return;
         this.dialogComponents.push(component);
     }
     registerHandler(handlerFunction,component,action){
+        if (component === KeyHandler.CONFIG) throw new Error("unable to register component "+component);
         if (! this.registrations[component]){
             this.registrations[component]={};
         }
@@ -96,6 +102,19 @@ class KeyHandler{
 
     setPage(page){
         this.page=page;
+        this.pageConfig=this.findConfigForPage(page);
+    }
+    findConfigForPage(page){
+        let rt={};
+        for (let i=-1;i<this.mergeLevels.length;i++){
+            const mapping=(i<0)?this.keymappings:this.merges[this.mergeLevels[i]];
+            if (! mapping) continue;
+            if (! mapping[page]) continue;
+            const pageConfig=mapping[page][KeyHandler.CONFIG];
+            if (! pageConfig) continue;
+            Object.assign(rt,pageConfig);
+        }
+        return rt;
     }
     findMappingForPage(key,page,opt_inDialog) {
         let mapping=this.findMappingForPageInternal(key,page,opt_inDialog);
@@ -133,14 +152,16 @@ class KeyHandler{
             try {
                 mapping = this.findMappingForType(lidx, key, page,opt_inDialog);
                 if (mapping) return mapping;
-                mapping = this.findMappingForType(lidx, key,this.ALLPAGES ,opt_inDialog);
+                if (this.pageConfig[KeyHandler.CFG_mode] !== PageKeyMode.EXPLICIT) {
+                    mapping = this.findMappingForType(lidx, key, this.ALLPAGES, opt_inDialog);
+                }
             } catch (e) {
-                console.log("error when searching keymapping: " + e)
+                base.log("error when searching keymapping: " + e)
             }
             if (mapping) return mapping;
         }
         mapping=this.findMappingForType(undefined,key,page,opt_inDialog);
-        if (mapping) return mapping;
+        if (mapping || this.pageConfig[KeyHandler.CFG_mode] === PageKeyMode.EXPLICIT) return mapping;
         return this.findMappingForType(undefined,key,this.ALLPAGES,opt_inDialog);
 
     }
@@ -194,7 +215,6 @@ class KeyHandler{
     }
 
     handleKeyEvent(keyEvent,opt_inDialog) {
-        if (!this.enabled) return;
         if (!keyEvent) return;
         let key = keyEvent.key;
         if (!key) return;
@@ -206,6 +226,7 @@ class KeyHandler{
     handleKey(key,opt_inDialog,opt_keyEvent){
         base.log("handle key: "+key);
         if (! this.keymappings) return;
+        if (this.pageConfig[KeyHandler.CFG_mode] === PageKeyMode.NONE) return
         let page=this.page;
         let mapping=this.findMappingForPage(key,page,opt_inDialog);
         if (! mapping) return;

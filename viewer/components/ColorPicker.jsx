@@ -6,12 +6,11 @@
 'use strict';
 
 import React from 'react';
-import reactCreateClass from 'create-react-class';
 import assign from 'object-assign';
 import tinycolor from 'tinycolor2';
 
 import Swipe from '../components/Swipe.jsx';
-import base from '../base.js';
+import base from '../base.ts';
 
 const toHsv = (color)=>{ return tinycolor(color).toHsv()};
 const toColorString=(color)=>{

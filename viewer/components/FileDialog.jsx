@@ -1,6 +1,6 @@
 /**
  *###############################################################################
- # Copyright (c) 2012-2020 Andreas Vogel andreas@wellenvogel.net
+ # Copyright (c) 2012-2025 Andreas Vogel andreas@wellenvogel.net
  #
  #  Permission is hereby granted, free of charge, to any person obtaining a
  #  copy of this software and associated documentation files (the "Software"),
@@ -22,113 +22,718 @@
  #
  ###############################################################################
  */
-import React from "react";
+import React, {useCallback, useEffect, useState} from "react";
 import keys from '../util/keys.jsx';
-import {Input, InputSelect, Radio} from "./Inputs";
+import {InputReadOnly, InputSelect, Radio} from "./Inputs";
 import DB from "./DialogButton";
-import Requests from "../util/requests";
+import Requests, {prepareUrl} from "../util/requests";
 import Toast from "./Toast";
-import EditOverlaysDialog, {KNOWN_OVERLAY_EXTENSIONS,DEFAULT_OVERLAY_CHARTENTRY} from "./EditOverlaysDialog";
-import OverlayDialog, {dialogHelper, InfoItem} from "./OverlayDialog";
-import globalStore from "../util/globalstore";
+import EditOverlaysDialog, {DEFAULT_OVERLAY_CHARTENTRY} from "./EditOverlaysDialog";
+import {
+    DBCancel,
+    DBOk,
+    DialogButtons,
+    DialogFrame,
+    DialogRow,
+    showPromiseDialog
+} from "./OverlayDialog";
 import ViewPage from "../gui/ViewPage";
-import assign from 'object-assign';
-import LayoutHandler from "../util/layouthandler";
-import base from "../base";
+import layouthandler, {layoutLoader} from "../util/layouthandler";
 import NavHandler from "../nav/navdata";
 import Helper from '../util/helper';
 import UserAppDialog from "./UserAppDialog";
 import DownloadButton from "./DownloadButton";
-import TrackInfoDialog, {TrackConvertDialog} from "./TrackInfoDialog";
-import {getTrackInfo,INFO_ROWS as TRACK_INFO_ROWS} from "./TrackInfoDialog";
-import {getRouteInfo,INFO_ROWS as ROUTE_INFO_ROWS} from "./RouteInfoDialog";
+import {getTrackInfo, INFO_ROWS as TRACK_INFO_ROWS, TrackConvertDialog} from "./TrackConvertDialog";
+import {getRouteInfo, INFO_ROWS as ROUTE_INFO_ROWS} from "./RouteInfoHelper";
 import RouteEdit from "../nav/routeeditor";
 import mapholder from "../map/mapholder";
 import LogDialog from "./LogDialog";
-import {stateHelper} from "../util/GuiHelpers";
 import Formatter from '../util/formatter';
-import routeobjects from "../nav/routeobjects";
 import PropertyHandler from "../util/propertyhandler";
+import {ConfirmDialog, InfoItem} from "./BasicDialogs";
+import {checkName, ItemNameDialog, safeName} from "./ItemNameDialog";
+import GuiHelpers from "../util/GuiHelpers";
+import {DEFAULT_OVERLAY_CONFIG, removeItemsFromOverlays, renameItemInOverlays} from "../map/overlayconfig";
+import {useHistory} from "./HistoryProvider";
+import globalStore from '../util/globalstore';
+import {readTextFile} from "./UploadHandler";
+import routeobjects from "../nav/routeobjects";
+import ImportDialog, {checkExt, getAcceptedExtensions, readImportExtensions} from "./ImportDialog";
+import PropTypes from "prop-types";
+import {BlobReader, ZipReader} from "@zip.js/zip.js";
+import {fetchItem, KNOWN_OVERLAY_EXTENSIONS, listItems} from "../util/itemFunctions";
+import {EditDialog} from "./EditDialog";
+import EditHandlerDialog from "./EditHandlerDialog";
+import {statusTextToImageUrl} from "./StatusItems";
+import {FileSource, PMTiles, TileType, tileTypeExt} from "pmtiles";
+import base from "../base";
+import {useDialogContext} from "./DialogContext";
+
 
 const RouteHandler=NavHandler.getRoutingHandler();
-/**
- * additional parameters that should be included in server requests
- * if they are set at the item
- * @type {{url: boolean, chartKey: boolean}}
- */
-export const additionalUrlParameters={
-    url:true,
-    chartKey:true
+
+const getExtensionForView=(item)=>{
+    if (item.extension) return item.extension.replace(/^\./,'');
+    return Helper.getExt(item.name);
 }
 
-export const ItemDownloadButton=(props)=>{
-    let {item,...forwards}=props;
-    if (item.canDownload === false) return null;
-    let localData=getLocalDataFunction(item);
-    return <DownloadButton
-        {...forwards}
-        url={localData?undefined:getDownloadUrl(item)}
-        fileName={getDownloadFileName(item)}
-        localData={localData}
-        type={item.type}
-        androidUrl={item.url}
-        />
+const plainNameForCheck=(item)=>{
+    if (! item) return;
+    return item.name;
 }
-const getLocalDataFunction=(item)=>{
-    if (item.type === 'route' && ! item.server){
-        return ()=>{ return RouteHandler.getLocalRouteXml(item.name)}
+const scopedNameForCheck=(item)=>{
+    if (! item || ! item.name) return;
+    if (item.checkPrefix === undefined) return;
+    return item.name.substring(item.checkPrefix.length);
+}
+class CopyAware{
+    constructor() {
     }
-    if (item.type === 'layout'){
-        return LayoutHandler.getLocalDownload(item.name);
+
+    copy(updates){
+        const rt=new this.constructor({});
+        for (let k of Object.keys(this)){
+            rt[k]=this[k];
+        }
+        if (updates && updates instanceof Object){
+            for (let k in updates){
+                rt[k]=updates[k];
+            }
+        }
+        return rt;
+    }
+    _fhelper(name,item){
+        const target=this[name];
+        if (typeof target === 'function'){
+            return target(this,item);
+        }
+        return target;
     }
 }
-const getDownloadFileName=(item)=>{
-    let actions=ItemActions.create(item,false);
-    return actions.nameForDownload(item.name);
-}
-const getDownloadUrl=(item)=>{
-    let name=item.name;
-    if (item.type==='route') {
-        if (item.server === false) return;
-        if (! name.match(/\.gpx$/)) name+=".gpx";
+/**
+ * handler for uploads based on file type
+ */
+class UploadAction extends CopyAware{
+    constructor({type,accessor}){
+        super();
+        this.type=type;
+        this.checkAccessor=accessor||((item)=>item.name);
+        this.preCheck=undefined; //a function that returns an object with name and potentially error, final
+                                 //leaving name unset will cancel
+        this.postCheck=undefined;//same as pre check
+        this.withDialog=true;
+        this.localAction=undefined;//if set you can consume the file. Return undefined
+        this.doneAction=undefined; //called when the upload is finished
+        this.userData=undefined;
+        this.fixedPrefix=false;
+        this.checkName=undefined;
     }
-    let url=globalStore.getData(keys.properties.navUrl)+"?request=download&type="+
-        encodeURIComponent(item.type)+"&name="+
-        encodeURIComponent(name)+"&filename="+encodeURIComponent(getDownloadFileName(item));
-    for (let k in additionalUrlParameters){
-        if (item[k] !== undefined){
-            url+="&"+k+"="+encodeURIComponent(item[k])
+    copy(updates){
+        const rt=super.copy(updates);
+        rt.userData=undefined;
+        return rt;
+    }
+
+    /**
+     * check a file name
+     * @param file
+     * @param dialogContext
+     * @returns {Promise<{proposal: *, error: string}|*>}
+     */
+    async _check(file,dialogContext){
+        const checkRes=(res,completeResult)=>{
+            if (! res) {
+                delete completeResult.name;
+                return true;
+            }
+            if (res.error){
+                throw new Error(rs.error)
+            }
+            Object.assign(completeResult,res);
+            if (! res.name){
+                delete completeResult.name;
+            }
+            if (res.final){
+                return true;
+            }
+            return false;
+        }
+        let rs={name:file.name};
+        this.userData={};
+        if (this.preCheck){
+            if (checkRes(await this.preCheck(this.userData,file.name,file,dialogContext),rs)) return rs;
+        }
+        const existing = await listItems(rs.type||this.type);
+        const accessor=(data)=>this.checkAccessor(data);
+        if (this.withDialog){
+            if (checkRes(await uploadCheckNameDialog({
+                dialogContext,
+                name:rs.name,
+                keepExtension: true,
+                nameForCheck: accessor,
+                itemList:existing,
+                checkFirst:true,
+                fixedPrefix: this.fixedPrefix,
+                nameCheckFunction:this.checkName?(...args)=>this.checkName(...args):checkName
+            }),rs)) return rs;
+        }
+        else {
+                const oname=rs.name;
+                let crs = checkName(rs.name, existing, accessor);
+                if (! crs){
+                    crs={name:oname}
+                }
+                if (checkRes(crs,rs)) return rs;
+        }
+        if (this.postCheck) {
+            if (checkRes(await this.postCheck(this.userData, rs.name, file, dialogContext,existing, accessor),rs)) return rs;
+        }
+        if (this.localAction){
+            return await this.localAction(this.userData,rs.name,file)
+        }
+        return rs;
+    }
+    /**
+     * check a file when being opened by a file input
+     * will reject if it does not match
+     * @param file
+     * @param dialogContext
+     * @returns {{}}
+     */
+    async checkFile(file,dialogContext){
+        const nameCheck=await this._check(file,dialogContext);
+        if (! nameCheck || ! nameCheck.name){
+            return ;
+        }
+        if (nameCheck.error){
+            return Promise.reject(nameCheck.error);
+        }
+        return {
+            ...nameCheck,
+            file:file
         }
     }
-    return url;
-}
-
-const showConvertFunctions = {
-    track: (history,item) => {
-        TrackConvertDialog.showDialog(history,item.name);
+    hasLocalAction(){
+        return !!this.localAction;
+    }
+    async afterUpload(){
+        if (this.doneAction){
+            return await this.doneAction(this.userData);
+        }
+        return false;
     }
 }
 
-export class ItemActions{
+class CreateAction extends CopyAware{
+    constructor({type,accessor,fixedExtension}) {
+        super();
+        this.type=type;
+        this.accessor=accessor;
+        this.title="Create new "+this.type;
+        this.proposal=undefined;
+        this.doneAction=undefined;
+        this.keepExtension=true;
+        this.fixedExtension=fixedExtension;
+        this.checkName=undefined;
+    }
+    async action(dialogContext){
+        const accessor=this.accessor?(item)=>this.accessor(item):(item)=>item.name;
+        const itemList=await listItems(this.type);
+        const fixedExtension=this._fhelper('fixedExtension');
+        const lcheckName=this.checkName?(name)=>this.checkName(name,accessor,itemList):checkName(name,itemList,accessor);
+        const res=await showPromiseDialog(dialogContext,(dp)=><ItemNameDialog
+            {...dp}
+            iname={this._fhelper('proposal')||''}
+            keepExtension={(!!this._fhelper('keepExtension') && ! this.fixedExtension)}
+            checkName={lcheckName}
+            fixedExt={fixedExtension}
+            title={this._fhelper('title')}
+            />
+        )
+        if (! res || ! res.name) return;
+        if (! this.doneAction) return res.name;
+        return await this.doneAction(this,res.name,dialogContext);
+    }
+}
+class Action extends CopyAware{
+    constructor({label,name,action,visible,close,disabled,fixedExtension,hasScope}) {
+        super();
+        this.label=label;
+        this.action=action;
+        this.visible=visible;
+        this.name=name;
+        this.close=close;
+        this.disabled=disabled;
+        this.fixedExtension=fixedExtension;
+        this.hasScope=hasScope||false;
+    }
+
+    /**
+     * helper that calls the action function
+     * @param ev
+     * @param item the item
+     * @returns {Promise<void>} resolves to undefined on success
+     * @private
+     */
+    async _ahelper(ev, item,dialogContext,history){
+        if (typeof this.action === 'function') {
+            let rs = this.action(this,item,dialogContext,history);
+            if (rs instanceof Promise) {
+                rs=await rs;
+            }
+            if (rs && dialogContext && Helper.unsetorTrue(this.close)) {
+                dialogContext.closeDialog();
+            }
+            return rs;
+        }
+    }
+    async runAction(item,dialogContext,history){
+        return this._ahelper({},item,dialogContext,history);
+
+    }
+    isVisible(item){
+       return  this._fhelper('visible',item)
+    }
+    getButton(item){
+        if (! this.isVisible(item)) return null;
+        return this.getButtonImpl(item);
+    }
+    getButtonImpl(item){
+        return (props)=> {
+            const history=useHistory();
+            return <DB
+            name={this.name}
+            visible={ this._fhelper('visible',item)}
+            label={this.label}
+            onClick={ async (ev, dialogContext) => {
+                try {
+                    await this._ahelper(ev, item, dialogContext, history);
+                }catch (e){
+                    if (e) Toast(e+"");
+                }
+            }}
+            close= {false}
+            disabled={this._fhelper('disabled',item)}
+            >{this.label}</DB>}
+    }
+
+}
+
+class DownloadAction extends Action{
+    constructor({url,localData,fileName,...values}) {
+        super(values);
+        this.url=url;
+        this.localData=localData;
+        this.fileName=fileName;
+    }
+
+    getButtonImpl(item) {
+        // eslint-disable-next-line react/display-name
+        return (props)=>{
+            return <DownloadButton
+                {...props}
+                fileName={this._fhelper('fileName',item)}
+                url={this._fhelper('url',item)}
+                localData={this.localData}
+                name={this.name}
+                useDialogButton={true}
+            >{this.label}</DownloadButton>;
+        }
+    }
+}
+//-------------------- action helper ---------------------
+const SchemeDialog = ({item, resolveFunction}) => {
+    const [scheme, setScheme] = useState(item.scheme);
+    return <DialogFrame title={`Change scheme for ${item.displayName}`}>
+        {item.originalScheme && <DialogRow className="userAction">
+                    <span className="inputLabel">
+                        original
+                    </span>
+            <span className="value">
+                        {item.originalScheme}
+                    </span>
+
+        </DialogRow>
+        }
+        <Radio
+            label="scheme"
+            value={scheme}
+            onChange={(v) => {
+                setScheme(v)
+            }}
+            itemList={[{label: "xyz", value: "xyz"}, {label: "tms", value: "tms"}]}
+            className="mbtilesType"/>
+        <DialogButtons
+            buttonList={[
+                DBCancel(),
+                DBOk(() => {
+                    resolveFunction(scheme)
+                }, {
+                    disabled: scheme === item.scheme
+                })
+            ]}
+        />
+    </DialogFrame>
+}
+
+const deleteItemQuery=async(item,dialogContext)=>{
+    try {
+        await showPromiseDialog(dialogContext, (dprops) => <ConfirmDialog
+                                                                          {...dprops} text={"delete " + (item.displayName || item.name) + "?"}
+        />);
+        return true
+    }catch (pe) {
+        return false;
+    }
+}
+const deleteRequest=async(item)=>{
+    return await Requests.getJson({
+        type: item.type,
+        command:'delete',
+        name:item.name
+    })
+}
+const renameRequest=async(item,newName)=>{
+    await Requests.getJson({
+        type: item.type,
+        command:'rename',
+        name:item.name,
+        newName:newName
+    })
+    return true;
+}
+const removeItemFromOverlays=async(item)=>{
+    if (! item || ! item.name) return;
+    await removeItemsFromOverlays(undefined,[item]);
+}
+
+export const deleteItem=async (item,dialogContext)=> {
+    if (! await deleteItemQuery(item,dialogContext)) return;
+    await deleteRequest(item);
+    await removeItemFromOverlays(item);
+    return true;
+};
+
+export const uploadCheckNameDialog=async ({dialogContext, type,name,keepExtension,nameForCheck,itemList,checkFirst,fixedPrefix, nameCheckFunction})=>{
+    if (! itemList){
+        if (type) {
+            itemList = await listItems(type);
+        }
+        else{
+            itemList=[];
+        }
+    }
+    if (! nameForCheck) nameForCheck=(item)=>item.name;
+    if (!nameCheckFunction) nameCheckFunction=checkName;
+    if (checkFirst){
+        let rf=nameCheckFunction(name); //check for allowed name
+        if (rf.error){
+            return Promise.reject(rf.error);
+        }
+        rf=nameCheckFunction(name,itemList,nameForCheck);
+        if (! rf.error){
+            return {name:name};
+        }
+    }
+    try{
+        const res=await showPromiseDialog(dialogContext,(dprops)=><ItemNameDialog
+            title={`${name} already exists, select new name`}
+            {...dprops}
+            iname={name}
+            keepExtension={keepExtension}
+            fixedPrefix={fixedPrefix}
+            checkName={(name)=>{
+                const [fn,ext]=Helper.getNameAndExt(name);
+                if (! name || (keepExtension && ! fn)){
+                    return {
+                        error: 'must not be empty',
+                        proposal: name
+                    }
+                }
+                return checkName(name,itemList,nameForCheck);
+            }}
+        />);
+        return {name:res.name}
+    } catch (e){
+        return;
+    }
+}
+/**
+ * run a rename dialog
+ * @param item
+ * @param dialogContext
+ * @param hasScope when set it will expect "checkPrefix" being set on the item (throws an error otherwise)
+ *                 it will run the dialog only for the part after the checkPrefix and will resolve to
+ *                 the new name prepended with checkPrefix
+ * @param nameForCheck accessor function for the item list (see checkName)
+ *                     if unset scopedNameForCheck/plainNameForCheck will be used
+ * @param keepExtension if set an existing extension will be kept (not part of the dialog)
+ * @param list the item list for checkName. If unset listItems(item.type) will be used to fill it
+ * @param title dialog title
+ * @param preCheck if set run this additional name check before the nromal checks. Same return like nameCheck.
+ * @return {Promise<*>} resolves to the new name
+ */
+
+const renameDialog=async({item,dialogContext,hasScope,nameForCheck,keepExtension,list,title,preCheck})=>{
+    let fixedPrefix=undefined;
+    let dname=item.name;
+    if (hasScope){
+        fixedPrefix=item.checkPrefix;
+        if (fixedPrefix===undefined) throw new Error("can only rename user items");
+        dname=dname.substr(fixedPrefix.length);
+    }
+    let itemList=list;
+    if (! itemList){
+        itemList=await listItems(item.type);
+    }
+    if (! nameForCheck) nameForCheck=hasScope?scopedNameForCheck:plainNameForCheck;
+    try{
+        const res=await showPromiseDialog(dialogContext,(dprops)=><ItemNameDialog
+            title={title||`Rename ${item.displayName||item.name}`}
+            {...dprops}
+            iname={dname}
+            fixedPrefix={fixedPrefix}
+            keepExtension={keepExtension}
+            checkName={(name)=>{
+                if (preCheck){
+                    const rs=preCheck(name);
+                    if (rs && rs.error) return rs;
+                }
+                const [fn,ext]=Helper.getNameAndExt(name);
+                if (! name || (keepExtension && ! fn)){
+                    return {
+                        error: 'must not be empty',
+                        proposal: dname
+                    }
+                }
+                return checkName(name,itemList,nameForCheck);
+            }}
+            mandatory={true}
+        />);
+        return fixedPrefix?fixedPrefix+res.name:res.name;
+    } catch (e){
+        console.error(e);
+        return;
+    }
+}
+
+const checkForPlugin=async (file)=>{
+    const pluginfiles = ['plugin.py', 'plugin.js', 'plugin.css', 'plugin.json'];
+    const forbiddenBaseChars = new RegExp('[^0-9a-zA-Z_-]');
+    const zipFileReader = new BlobReader(file);
+    const zipReader = new ZipReader(zipFileReader);
+    let foundName;
+    const entries = await zipReader.getEntries()
+    let hasFiles = false;
+    entries.forEach(entry => {
+        if (!entry.filename) {
+            throw new Error("invalid entry in zip without filename")
+        }
+        const parts = entry.filename.split("/");
+        if (parts.length < 1) {
+            throw new Error( "invalid entry in zip without filename")
+        }
+        if (!entry.directory && parts.length < 2) {
+            throw new Error(`files must be located in a sub directory in the zip: ${entry.filename}`)
+        }
+        if (!parts[0]){
+            throw new Error(`first part in a filename must not be empty: ${entry.filename}`);
+        }
+        parts.forEach(part => {
+            if (part === '') return;
+            const sname = safeName(part);
+            if (sname !== part || part === '.' || part === '..') {
+                throw new Error( `invalid characters in file name ${entry.filename} (${part})`)
+            }
+        })
+        if (foundName) {
+            if (parts[0] !== foundName) {
+                throw new Error(`all files in zip must be under one sub directory ${foundName} : ${entry.filename}`)
+            }
+        } else {
+            foundName = parts[0];
+            if (forbiddenBaseChars.test(foundName)) {
+                throw new Error(`the plugin directory contains forbidden characters ${foundName}`)
+            }
+        }
+        if (!entry.directory) {
+            if (parts.length === 2 && pluginfiles.indexOf(parts[1]) >= 0) {
+                hasFiles = true;
+            }
+        }
+    })
+    if (!hasFiles) {
+        throw new Error( "no plugin files in zip")
+    }
+    return foundName;
+}
+const standardActions={
+    delete: new Action({
+            label: 'Delete',
+            name: 'delete',
+            action: async (action,item,dialogContext)=>{
+                return await deleteItem(item,dialogContext)
+            }
+        }),
+    /**
+     * rename action
+     * normally you should override the (async) execute method that will receive
+     * (item,newName).
+     * The execute method should return true on success.
+     * For scoped items the "hasScope" must be set at the action.
+     * newName will include the scope in this case.
+     * The default execute is to run a serverRequest for rename.
+     * You can add a preCheck to the action to do some additional name checks before the normal ones.
+     */
+    rename: new Action({
+        label: 'Rename',
+        name: 'rename',
+        action: async (action, item, dialogContext) => {
+            let newName = await renameDialog({
+                item,
+                dialogContext,
+                hasScope: action.hasScope,
+                keepExtension: action.keepExtension,
+                nameForCheck: action.nameForCheck,
+                title:action.title,
+                preCheck: action.preCheck
+            });
+            if (!newName) return;
+            const rs=await action.execute(item, newName);
+            if (rs) {
+                await renameItemInOverlays(undefined, item, newName)
+            }
+            return rs;
+        }
+    }).copy({
+        execute: async (item, newName) => {
+            await renameRequest(item, newName);
+            return true;
+        }
+    }),
+    copy: new Action({
+        label: 'Copy',
+        name: 'copy',
+        action: async (action, item, dialogContext) => {
+            let dname=item.name;
+            if (action.nameToBaseName){
+                dname=action.nameToBaseName(dname);
+            }
+            const itemList=await listItems(item.type);
+            const accessor=action.hasScope?scopedNameForCheck:plainNameForCheck;
+            let res= await showPromiseDialog(dialogContext,(dprops)=><ItemNameDialog
+                {...dprops}
+                iname={dname}
+                fixedExtension={action.fixedExtension}
+                fixedPrefix={action.fixedPrefix}
+                title={"Copy to..."}
+                mandatory={true}
+                checkName={(name)=>{
+                    return checkName(name,itemList,accessor);
+                }}
+            />);
+            if (!res || ! res.name) return;
+            const rs=await action.execute(item, res.name);
+            return rs;
+        }
+    }).copy({
+        execute: async (item, newName) => {
+            const data=await Requests.getHtmlOrText({
+                type: item.type,
+                command: 'download',
+                name: item.name
+            });
+            await Requests.postPlain({
+                type: item.type,
+                command: 'upload',
+                name: newName,
+            },data);
+            return true;
+        }
+    }),
+    view: new Action({
+        label: 'View',
+        name: 'view',
+        action: async (action,item,dialogContext,history)=>{
+            history.push('viewpage', {type: item.type, name: item.name, readOnly: true,ext:action.fixedExtension||getExtensionForView(item)});
+            return true;
+        },
+        visible: (action,item)=>{
+            let ext=action.fixedExtension||getExtensionForView(item);
+            return ViewPage.VIEWABLES.indexOf(ext)>=0;
+        }
+    }),
+    download:new DownloadAction({
+       label:'Download',
+       name: 'download',
+       visible:  (action,item)=>{
+           return item.canDownload
+       },
+       fileName:(action,item)=>action.downloadName||item.downloadName,
+       url:(action,item)=>{
+           return prepareUrl({
+               type:item.type,
+               command:'download',
+               name:item.name,
+               filename: action.downloadName||item.downloadName||item.name
+           })
+       }
+
+    }),
+    config: new Action({
+        label:'Config',
+        name: 'config',
+        action: async (action,item,dialogContext)   =>{
+            dialogContext.replaceDialog((props)=> {
+                return <EditHandlerDialog
+                    {...props}
+                    title="Edit Handler"
+                    handlerId={item.handlerId}
+                    child={item.child}
+                />
+            },()=>{
+                if (action.doneCallback) action.doneCallback(item);
+            });
+        },
+        visible: (action,item)=>{
+            return !!item.handlerId && item.canEdit !== false
+        }
+    }),
+    edit: new Action({
+        label: 'Edit',
+        name: 'edit',
+        action: async (action,item,dialogContext,history)=>{
+            history.push('viewpage', {type: item.type, name: item.name, ext:action.fixedExtension||getExtensionForView(item)});
+            return true;
+        },
+        visible: false,
+        close: true
+    }),
+    overlays: new Action({
+        label: 'Overlays',
+        name: 'overlays',
+        action: async (action,item,dialogContext,history)=>{
+            dialogContext.replaceDialog((props) => {
+                return (
+                    <AddRemoveOverlayDialog
+                        {...props}
+                        current={item}
+                    />
+                )
+            });
+        },
+        visible: false
+    })
+
+}
+export class ItemActions extends CopyAware{
     constructor(type) {
+        super();
         this.type=type;
         this.headline=type
-        this.showEdit=false;
-        this.showView=false;
-        this.showDelete=false;
-        this.showRename=false;
-        this.showApp=false;
-        this.isApp=false;
-        this.showOverlay=false;
-        this.showScheme=false;
-        this.showConvertFunction=undefined;
-        this.showImportLog=false;
-        this.showDownload=false;
-        this.showIsServer=false;
-        this.timeText='';
-        this.infoText='';
-        this.className='';
-        this.extForView='';
+        this.fixedExtension=undefined; //if set we always remove this from names before sending to the server and expect files to have this
+        this.allowedExtensions=undefined; //allowed file extensions for upload, cen be left empty if fixed extension is set or if all are allowed
+        this.hasScope=false;
         /**
          * if this is set call this function to upload a new item
          * instead of the normal server upload
@@ -138,688 +743,1409 @@ export class ItemActions{
          * @type {undefined}
          */
         this.localUploadFunction=undefined;
-        /**
-         * convert an entity name as received from the server to a name we offer when downloading
-         * @param name
-         * @returns {*}
-         */
-        this.nameForDownload=(name)=>name;
-        /**
-         * convert a local file name into an entity name as the server would create
-         * @param name
-         * @returns {*}
-         */
-        this.nameForUpload=(name)=>name;
+
+        this.build();
+        this.postCreate()
     }
-    static create(props,isConnected){
-        if (typeof(props) === 'string') props={type:props};
-        if (! props || ! props.type){
-            return new ItemActions();
+    postCreate(){
+        this.nameForCheck=this.nameForCheck.bind(this);
+        this.prefixForDisplay=this.prefixForDisplay.bind(this);
+        this.getExtensionForView=this.getExtensionForView.bind(this);
+        if (! this.allowedExtensions){
+            if (this.fixedExtension){
+                this.allowedExtensions=[this.fixedExtension];
+            }
         }
-        let rt=new ItemActions(props.type);
-        let ext=Helper.getExt(props.name);
-        let viewable=ViewPage.VIEWABLES.indexOf(ext)>=0;
-        let editableSize=props.size !== undefined && props.size < ViewPage.MAXEDITSIZE;
-        let allowedOverlay=KNOWN_OVERLAY_EXTENSIONS.indexOf(Helper.getExt(props.name,true)) >= 0;
-        let canEditOverlays=globalStore.getData(keys.gui.capabilities.uploadOverlays) && isConnected;
-        if (props.time !== undefined) {
-            rt.timeText=Formatter.formatDateTime(new Date(props.time*1000));
+    }
+    getExtensionForView(item){
+        if (this.fixedExtension){
+            return this.fixedExtension;
         }
-        rt.infoText=props.name;
-        if (props.active){
-            rt.className+=' activeEntry';
+        return getExtensionForView(item);
+    }
+
+    /**
+     * allowed extensions for upload buttons
+     * @returns {Promise<*|*[]>}
+     */
+    async getAllowedExtensions(){
+        if (this.fixedExtension){ return [this.fixedExtension];}
+        if (! this.allowedExtensions){ return;}
+        return this.allowedExtensions;
+    }
+
+    /**
+     * convert an item.name into a base name that can be used
+     * to upload a new item
+     * this will strip the prefix (and if a fixedExtension is there it will also strip this)
+     * @param name
+     * @returns {*}
+     */
+    nameToBaseName(name){
+        if (! name) return name;
+        if (this.hasScope) {
+            name = name.replace(/^user\./, '').replace(/^system\./, '').replace(/^plugin\.[^.]*[.]*/, '');
         }
-        rt.extForView=ext;
-        switch (props.type){
-            case 'chart':
-                rt.headline='Charts';
-                rt.showDelete=props.canDelete && isConnected;
-                rt.showOverlay=canEditOverlays;
-                rt.showScheme=isConnected && props.url && props.url.match(/.*mbtiles.*/);
-                rt.showImportLog=props.hasImportLog;
-                rt.showDownload=props.canDelete;
-                if (props.originalScheme){
-                    rt.className+=' userAction';
+        if (this.fixedExtension && Helper.endsWith(name.toLowerCase(),"."+this.fixedExtension)){
+            name=name.substring(0,name.length-this.fixedExtension.length-1);
+        }
+        return name;
+    }
+    /**
+     * get a name from a list entry to compare against a local file name
+     * @param item an entry from the list
+     * @param opt_ext - if true add an fixed extension
+     */
+    nameForCheck(item,opt_ext){
+        const res=this.hasScope?scopedNameForCheck(item):plainNameForCheck(item);
+        if (! opt_ext || ! res || ! this.fixedExtension) return res;
+        return res+"."+this.fixedExtension;
+    }
+    /**
+     * get a prefix to be shown in upload/rename dialogs
+     * @returns {string|undefined}
+     */
+    prefixForDisplay(){
+        return this.hasScope?'user.':undefined;
+    }
+    canModify(item) {
+        return item.canDelete && (! item.server || this.isConnected());
+    }
+    canView(item) {
+        return false;
+    }
+    showIsServer(item){
+        return false;
+    }
+    showUpload(){
+        return this.isConnected();
+    }
+    async buildExtendedInfo(item){
+        return {}
+    }
+    getExtendedInfoRows(item){
+        return  [];
+    }
+    fillActions(item,actions){
+
+    }
+    getCreateAction(){
+        return new CreateAction({
+            type: this.type,
+            accessor: (item)=>this.nameForCheck(item),
+            fixedExtension: this.fixedExtension
+        })
+    }
+    getUploadAction(){
+        let rt=new UploadAction({type:this.type,accessor:(data)=>this.nameForCheck(data)});
+        if (! this.fixedExtension && (! this.allowedExtensions || this.allowedExtensions.length < 1)){
+            return rt;
+        }
+        const nameChecker=(userData,name)=> {
+            const [fn, ext] = Helper.getNameAndExt(name);
+            const err=this.checkExtension(ext);
+            if (err) throw new Error(err);
+            if (this.fixedExtension){
+                return {name:fn};
+            }
+            return {name:name};
+        }
+        return rt.copy({
+            preCheck:nameChecker,
+            fixedPrefix: this.prefixForDisplay(),
+        })
+    }
+    getActionButtons(item){
+        const actions= [];
+        this.fillActions(item,actions);
+        const rt=[];
+        actions.forEach(action=>{
+            if (action.isVisible(item)){
+                rt.push(action.getButton(item));
+            }
+        })
+        return rt;
+    }
+    getActions(item,filter){
+        class ActionList{
+            constructor(filter) {
+                this.filter=filter;
+                if (this.filter && ! (this.filter instanceof Array)){
+                    this.filter = [this.filter]
                 }
-                break;
-            case 'track':
-                rt.headline='Tracks';
-                rt.showDelete=true;
-                rt.showDownload=true;
-                rt.showView=viewable;
-                rt.showConvertFunction=ext === 'gpx'?showConvertFunctions[props.type]:undefined;
-                rt.showOverlay=allowedOverlay && canEditOverlays;
-                break;
-            case 'route':
-                rt.headline='Routes';
-                rt.showIsServer=props.server;
-                rt.showDelete= ! props.active &&  props.canDelete !== false  && ( ! props.isServer || isConnected);
-                rt.showView=viewable;
-                rt.showEdit=mapholder.getCurrentChartEntry() !== undefined;
-                rt.showOverlay=canEditOverlays;
-                rt.showDownload=true;
-                rt.extForView='gpx';
-                rt.infoText+=","+Formatter.formatDecimal(props.length,4,2)+
-                    " nm, "+props.numpoints+" points";
-                rt.nameForDownload=(name)=>{
-                    if (! name.match(/\.gpx$/)) name+=".gpx";
-                    return name;
-                }
-                rt.nameForUpload=(name)=>{
-                    return name.replace(/\.gpx$/,'');
-                }
-                rt.localUploadFunction=(name,data)=>{
-                    //name is ignored
-                    try{
-                        let route=new routeobjects.Route("");
-                        route.fromXml(data);
-                        if (! route.name){
-                            return Promise.reject("route has no name");
-                        }
-                        return RouteHandler.saveRoute(route);
-                    } catch(e){
-                        return Promise.reject(e);
+                this.items={}
+            }
+
+            push(...items) {
+                for (let item of items) {
+                    if (! this.filter || this.filter.indexOf(item.name) >= 0){
+                        this.items[item.name]=item;
                     }
                 }
-                break;
-            case 'layout':
-                rt.headline='Layouts';
-                rt.showDelete=isConnected && props.canDelete !== false && ! props.active;
-                rt.showView = true;
-                rt.showEdit = isConnected && editableSize && props.canDelete;
-                rt.showDownload = true;
-                rt.extForView='json';
-                rt.nameForDownload=(name)=>{
-                    return LayoutHandler.nameToBaseName(name)+".json";
-                }
-                rt.nameForUpload=(name)=>{
-                    return LayoutHandler.fileNameToServerName(name);
-                }
-                rt.localUploadFunction=(name,data,overwrite)=>{
-                    return LayoutHandler.uploadLayout(name,data,overwrite);
-                }
-                break;
-            case 'settings':
-                rt.headline='Settings';
-                rt.showDelete=isConnected && props.canDelete !== false && ! props.active;
-                rt.showView = true;
-                rt.showEdit = isConnected && editableSize && props.canDelete;
-                rt.showDownload = true;
-                rt.showRename=isConnected && props.canDelete;
-                rt.extForView='json';
-                rt.nameForDownload=(name)=>{
-                    return name.replace(/^user\./,'').replace(/^system\./,'').replace(/^plugin/,'')+".json";
-                }
-                rt.nameForUpload=(name)=>{
-                    let serverName=name;
-                    ['user','system','plugin'].forEach((prefix)=>{
-                        if (serverName.indexOf(prefix+".") === 0){
-                            serverName=serverName.substr(prefix.length+1);
-                        }
-                    });
-                    return 'user.'+serverName.replace(/\.json$/,'');
-                }
-                rt.localUploadFunction=(name,data,overwrite)=>{
-                   return PropertyHandler.verifySettingsData(data, true,true)
-                       .then((res) => PropertyHandler.uploadSettingsData(name,res.data,false,overwrite));
-                }
-                break;
-            case 'user':
-                rt.headline='User';
-                rt.showDelete=isConnected && props.canDelete;
-                rt.showRename=isConnected && props.canDelete;
-                rt.showView=viewable;
-                rt.showEdit=editableSize && ViewPage.EDITABLES.indexOf(ext) >=0 && props.canDelete && isConnected;
-                rt.showDownload=true;
-                rt.showApp=isConnected && ext === 'html' && globalStore.getData(keys.gui.capabilities.addons);
-                rt.isApp=rt.showApp && props.isAddon;
-                break;
-            case 'images':
-                rt.headline='Images';
-                rt.showDelete = isConnected && props.canDelete !== false;
-                rt.showView = viewable;
-                rt.showRename = isConnected && props.canDelete !== false;
-                rt.showDownload=true;
-                break;
-            case 'overlay':
-                rt.headline='Overlays';
-                rt.showDelete = isConnected && props.canDelete !== false;
-                rt.showView = viewable;
-                rt.showRename = isConnected && props.canDelete !== false;
-                rt.showDownload=true;
-                rt.showEdit= editableSize && ViewPage.EDITABLES.indexOf(ext) >=0 && isConnected;
-                rt.showOverlay = canEditOverlays && allowedOverlay;
-                break;
+            }
         }
-        return rt;
+        const actions=new ActionList(filter);
+        this.fillActions(item,actions);
+        return actions.items;
+    }
+
+    /**
+     * check for allowed extensions, return an error text if not allowed
+     * @param ext
+     * @param opt_title
+     */
+    checkExtension(ext,opt_title){
+        if (! ext || ! this.allowedExtensions) return ;
+        if (this.allowedExtensions.indexOf(ext) >=0) return;
+        const title=opt_title?opt_title+": ":"";
+        return title+`extension ${ext} not allowed, only `+this.allowedExtensions.join(",");
+
+    }
+    isConnected(){
+        return globalStore.getData(keys.properties.connectedMode);
+    }
+    canEditOverlays(){
+        return globalStore.getData(keys.gui.capabilities.uploadOverlays) && this.isConnected();
+    }
+    getInfoRows(item){
+        return [
+            {label:'Time',value:'time',formatter:(v,item)=>this.getTimeText(item)},
+            {label:'Size',value:'size',formatter:(v)=>{
+                if (v === 0) return undefined;
+                if (v < 10*1024) return v;
+                if (v < 10*1024*1024) return (v/1024).toFixed(1)+" k";
+                return (v/(1024*1024)).toFixed(1)+ " M";
+                }}
+        ]
+    }
+    getTimeText(item){
+        if (item.time !== undefined) {
+            return Formatter.formatDateTime(new Date(item.time*1000));
+        }
+    }
+    getInfoText(item){
+        return item.displayName||item.name
+    }
+    getClassName(item){
+        return item.isActive?"activeEntry":undefined;
+    }
+    build(){
+    }
+
+    /**
+     * used in DownloadItemList to decide if the item should be shown
+     * intended to be overwritten
+     * @param item
+     * @return {boolean|string} - to hide return false or an error string
+     */
+    show(item){
+        return true;
     }
 }
 
-const getImportLogUrl=(name)=>{
-    return globalStore.getData(keys.properties.navUrl)+
-        "?request=api&type=import&command=getlog&name="+encodeURIComponent(name);
-}
+let lastChartImportSubDir=undefined;
+class ChartItemActions extends ItemActions{
+    constructor() {
+        super('chart');
+    }
+    build(){
+        this.headline='Charts';
+        this.allowedExtensions=['gemf','mbtiles','xml','pmtiles']; //import extensions separately
+        this.hasScope=true;
 
-
-class AddRemoveOverlayDialog extends React.Component{
-    constructor(props) {
-        super(props);
-        this.state={};
-        this.state.chartList=[DEFAULT_OVERLAY_CHARTENTRY];
-        this.state.chart=DEFAULT_OVERLAY_CHARTENTRY.chartKey
-        this.state.action='add';
-        this.state.changed=false;
-        this.titles={add:"Add to Charts",remove:"Remove from Charts"}
-        this.dialogHelper=dialogHelper(this);
     }
-    componentDidMount() {
-        Requests.getJson('',{},{
-            request:'list',
-            type:'chart'
-        })
-            .then((data)=>{
-                this.setState({
-                    chartList:this.state.chartList.concat(data.items)
-                })
-            })
-            .catch((error)=>Toast("unable to read chart list: "+error));
-    }
-
-    action(){
-        if (this.state.action === 'remove'){
-            Requests.getJson('',{},{
-                request: 'api',
-                type:'chart',
-                command:'deleteFromOverlays',
-                name:this.props.current.name,
-                itemType:this.props.current.type
-            })
-                .then(()=>{})
-                .catch((error)=>{Toast(error)})
-            return;
+    getInfoRows(item) {
+        let rows=super.getInfoRows(item);
+        if (item.scheme){
+            rows=rows.concat([{label:'Scheme',value:'scheme'}] );
         }
-        if (this.state.action === 'add'){
-            let chart=this.findChart(this.state.chart);
-            if (! chart) return;
-            EditOverlaysDialog.createDialog(chart,
-                undefined,
-                this.props.current
-                );
-            return;
-        }
+        return rows;
     }
-    findChart(chartKey){
-        for (let i=0;i<this.state.chartList.length;i++){
-            if (this.state.chartList[i].chartKey === chartKey) return this.state.chartList[i];
-        }
+    showUpload() {
+        return super.showUpload() && globalStore.getData(keys.gui.capabilities.uploadCharts,false);
     }
-    getChartSelectionList(){
-        if (this.state.action === 'remove'){
-            return {label:DEFAULT_OVERLAY_CHARTENTRY.name,value:DEFAULT_OVERLAY_CHARTENTRY.chartKey};
-        }
-        let rt=[];
-        this.state.chartList.forEach((chart)=>{
-            if (! chart.chartKey) return;
-            rt.push({label:chart.name,value:chart.chartKey});
-        })
-        return rt;
-    }
-    getCurrentChartValue(){
-        if (this.state.action === 'remove'){
-            return {label:'All Charts',value:undefined};
-        }
-        return(
-            {
-                label:(this.findChart(this.state.chart) || {}).name,
-                value:this.state.chart
-            })
-    }
-    render(){
-        return (
-            <div className="AddRemoveOverlayDialog flexInner">
-                <h3 className="dialogTitle">On Charts</h3>
-                <div className={"dialogRow"}>
-                    <span className="itemInfo">{this.props.current.name}</span>
-                </div>
-                <Radio
-                    dialogRow={true}
-                    label={"Action"}
-                    value={this.state.action}
-                    onChange={(v)=>{this.setState({changed:true,action:v})}}
-                    itemList={[{label:this.titles.add,value:"add"},{label:this.titles.remove,value:"remove"}]}
+    fillActions(item,actions) {
+        actions.push(new Action({
+            label: 'Open',
+            name: 'openchart',
+            action: (action,item,dialogContext,history)=>{
+                mapholder.setChartEntry(item);
+                history.push('navpage');
+            },
+            visible: item.name !== DEFAULT_OVERLAY_CONFIG
+        }))
+        actions.push(standardActions.delete.copy({
+            visible: this.canModify(item)
+        }));
+        actions.push(new Action({
+            name: 'scheme',
+            label: 'Scheme',
+            action: async (action,item, dialogContext) => {
+                let newScheme;
+                try {
+                    newScheme = await showPromiseDialog(dialogContext,
+                        (dprops) => <SchemeDialog
+                            {...dprops}
+                            item={item}
+                        />);
+                } catch (e) {
+                    return;
+                }
+                if (newScheme) {
+                    await Requests.getJson({
+                        type: item.type,
+                        name: item.name,
+                        command: 'scheme',
+                        newScheme: newScheme
+                    })
+                    return true;
+                }
+            },
+            visible: this.canModify(item) && item.name && item.name.match(/.*\.mbtiles$/)
+        }))
+        actions.push(standardActions.download.copy({}))
+        actions.push(new Action({
+            name: 'overlays',
+            label: 'Overlays',
+            action: async (action,item, dialogContext) => {
+                EditOverlaysDialog.createDialog(item,()=>dialogContext.closeDialog());
+            },
+            visible: this.canEditOverlays(),
+            close: false
+        }))
+        actions.push(new Action({
+            name:'log',
+            label: 'Log',
+            action: async (action,item,dialogContext) => {
+                dialogContext.replaceDialog((dprops) => {
+                    return <LogDialog {...dprops}
+                                      baseUrl={prepareUrl({
+                                          type:'import',
+                                          command:'getlog',
+                                          name:item.name
+                                      })}
+                                      title={'Import Log'}
                     />
-                <InputSelect
+                })
+            },
+            close: false,
+            visible:item.hasImportLog
+        }))
+    }
+
+    async getAllowedExtensions() {
+        const rt=(await super.getAllowedExtensions())||[];
+        const importExtensions = (await readImportExtensions())||[];
+        return rt.concat(getAcceptedExtensions(importExtensions));
+    }
+
+    getUploadAction() {
+        const action=super.getUploadAction();
+        return action.copy({
+            preCheck:async (userData, name, file, dialogContext)=>{
+                const [fn, ext] = Helper.getNameAndExt(name);
+                const err=this.checkExtension(ext);
+                if (! err){
+                    if (ext === 'pmtiles'){
+                        const pm=new PMTiles(new FileSource(file));
+                        const header=await pm.getHeader();
+                        const allowedTypes=[
+                            TileType.Unknown,
+                            TileType.Png,
+                            TileType.Webp,
+                            TileType.Jpeg
+                        ]
+                        if (allowedTypes.indexOf(header.tileType) < 0){
+                            throw new Error(`TileType ${tileTypeExt(header.tileType)} is no known raster tile type`);
+                        }
+                    }
+                    return {name:name}
+                }
+                const importExtensions=(await readImportExtensions())||[];
+                const importConfig=checkExt(ext,importExtensions);
+                if (!importConfig.allow){
+                    throw new Error(err);
+                }
+                if (ext === 'zip' && typeof TransformStream !== "undefined"){
+                    //check if this is a plugin
+                    try{
+                        const pluginName=await checkForPlugin(file);
+                        const res=await showPromiseDialog(dialogContext,(dprops)=>{
+                            return <ConfirmDialog
+                                {...dprops}
+                                text={`This zip seems to contain the plugin ${pluginName}.\n`+
+                                    "To upload plugins change to the plugin tab.\n"+
+                                "Ok to upload to chart importer any way"}
+                            />}).then(()=>true,()=>false);
+                        if (! res) return;
+                    }catch (e){
+                        base.log("picheck",e);
+                    }
+                }
+                const impres=await showPromiseDialog(dialogContext,
+                    (dprops)=> {
+                        userData.history=useHistory();
+                        return <ImportDialog
+                            {...dprops}
+                            allowNameChange={true}
+                            allowSubDir={importConfig.subdir}
+                            name={name}
+                            subdir={lastChartImportSubDir}
+                        />
+                    }
+                    )
+                if (impres){
+                    if (impres.subdir) {
+                        lastChartImportSubDir = impres.subdir;
+                        impres.options={subdir:impres.subdir};
+                        userData.subdir=impres.subdir;
+                        delete impres.subdir;
+                    }
+                    userData.importer=true;
+                    impres.final=true;
+                }
+                return impres;
+            },
+            doneAction:(userData)=>{
+                if (userData.importer && userData.history){
+                    userData.history.push('importerpage',{subdir:userData.subdir});
+                }
+            }
+        })
+    }
+}
+
+class RouteItemActions extends ItemActions{
+    constructor() {
+        super('route');
+    }
+    build(){
+        this.headline = 'Routes';
+        this.fixedExtension='gpx';
+        this.hasScope=true;
+    }
+
+    getInfoRows(item) {
+        return super.getInfoRows(item).concat([
+            {label:'Server',value:'server',formatter:(v)=> {
+                    if (v === undefined) return undefined;
+                    return v+'';
+                }},
+            {label:'Active',value:'active',formatter:(v)=> {
+                if (v === undefined) return undefined;
+                return v+'';
+                }},
+            {label:'Editing',value:'isEditing',formatter:(v)=> {
+                    if (v === undefined) return undefined;
+                    return v+'';
+                }}
+
+        ]);
+    }
+
+    showUpload() {
+        return true;
+    }
+
+    async buildExtendedInfo(item) {
+        return getRouteInfo(item);
+    }
+
+    getExtendedInfoRows(item) {
+        return ROUTE_INFO_ROWS;
+    }
+
+    canModify(item) {
+        return !item.active && item.canDelete !== false &&
+            (!item.server || this.isConnected()) &&
+            ! RouteHandler.isActiveRoute(item)
+    }
+
+    canView(item) {
+        return true;
+    }
+
+    showIsServer(item) {
+        return item.server;
+    }
+    namePreCheck(name){
+        if (! name) {
+            const d=new Date();
+            const proposal=`route${d.getFullYear()}${d.getMonth()}${d.getDate()}`;
+            return {
+                error:'must not be empty',
+                proposal: proposal
+            }
+        }
+        if (name.endsWith('.'+this.fixedExtension)){
+            return {
+                error:'must not end with .'+this.fixedExtension,
+                proposal: name.substring(0,name.length-this.fixedExtension.length-1),
+            }
+        }
+        if (name.startsWith(routeobjects.LOCAL_PREFIX)){
+            return {
+                error: 'must not start with '+routeobjects.LOCAL_PREFIX,
+                proposal: name.substr(routeobjects.LOCAL_PREFIX.length)
+            }
+        }
+    }
+    fillActions(item, actions) {
+        const canModify = this.canModify(item);
+        actions.push(standardActions.delete.copy({
+            visible: canModify,
+            action: async (action,item, dialogContext) => {
+                if (!await deleteItemQuery(item, dialogContext)) return;
+                if (RouteHandler.isActiveRoute(item)) {
+                    throw new Error("unable to delete active route")
+                }
+                await RouteHandler.deleteRoute(item.name);
+                await removeItemsFromOverlays(item);
+                return true;
+            }
+        }));
+        if (!routeobjects.isServerName(item.name)){
+            actions.push(new Action({
+                label:'Upload',
+                name:'upload',
+                action: async (action,item,dialogContext,history)=>{
+                    const items = await listItems('route');
+                    let found=false;
+                    const serverName=routeobjects.SERVER_PREFIX+routeobjects.nameToBaseName(item.name);
+                    for (let item of items) {
+                        if (item.name === serverName){
+                            found=true;
+                            break;
+                        }
+                    }
+                    let txt=found?
+                        "Replace existing server route and delete local?"
+                        :
+                        "Upload to server and delete local?";
+                    const rs=await showPromiseDialog(dialogContext,(dp)=><ConfirmDialog {...dp} text={txt}/>)
+                    if (rs) {
+                        const route=await RouteHandler.fetchRoute(item.name);
+                        route.setName(serverName);
+                        await RouteHandler.saveRoute(route,true);
+                        await RouteHandler.deleteRoute(item.name);
+                        dialogContext.closeDialog();
+                    }
+                },
+                visible: ()=>this.isConnected(),
+            }))
+        }
+        actions.push(standardActions.rename.copy({
+            hasScope: this.hasScope,
+            visible:canModify,
+            execute: async (item,newName) => {
+                if (RouteHandler.isActiveRoute(item)) {
+                    throw new Error("unable to rename active route")
+                }
+                const rs= await RouteHandler.renameRoute(item,newName);
+                return rs;
+            },
+            preCheck:(name)=>this.namePreCheck(name),
+        }))
+        const prfx=this.isConnected()?routeobjects.SERVER_PREFIX:routeobjects.LOCAL_PREFIX;
+        actions.push(standardActions.copy.copy({
+            visible:true,
+            keepExtension:false,
+            fixedPrefix: prfx,
+            hasScope: true,
+            nameToBaseName:(name)=>this.nameToBaseName(name),
+            execute: async (item,newName) => {
+                const route = await RouteHandler.fetchRoute(item.name)
+                route.setName(prfx+newName);
+                await RouteHandler.saveRoute(route);
+                return true;
+            }
+        }))
+        actions.push(standardActions.view.copy({
+            action: async (action,item, dialogContext,history) => {
+                const route = await RouteHandler.fetchRoute(item.name)
+                history.push('viewpage', {
+                    type: item.type,
+                    name: item.name,
+                    readOnly: true,
+                    ext:this.getExtensionForView(),
+                    data: route.toXml()
+                });
+                return true;
+            }
+        }))
+        actions.push(standardActions.edit.copy({
+            visible:(canModify || item.active) && mapholder.getCurrentChartEntry() !== undefined,
+            action: async (action,item, dialogContext,history) => {
+                const route = await RouteHandler.fetchRoute(item.name);
+                let editor = new RouteEdit(RouteEdit.MODES.EDIT);
+                editor.setNewRoute(route, 0);
+                history.push('editroutepage', {center: true});
+                return true;
+            }
+        }))
+        //for the download action we currently rely on the server routes
+        //being without any name prefix - so we can provide them "as is"
+        actions.push(standardActions.download.copy({
+            localData: item.server?undefined:
+                async ()=>{
+                    const route=await RouteHandler.fetchRoute(item.name)
+                    if (! route) throw new Error("unable to get route")
+                    route.setName(this.nameToBaseName(route.name));
+                    return route.toXml();
+                },
+            downloadName: this.nameToBaseName(item.name)+'.'+this.fixedExtension,
+        }))
+        actions.push(standardActions.overlays.copy({
+            visible: this.canEditOverlays()
+        }))
+    }
+
+    getUploadAction() {
+        let action=super.getUploadAction();
+        return action.copy({
+            preCheck: async (userData, name, file)=>{
+                const [fn, ext] = Helper.getNameAndExt(name);
+                if (ext !== this.fixedExtension) throw new Error(`only ${this.fixedExtension} for routes`);
+                const data=await readTextFile(file);
+                userData.nroute=new routeobjects.Route();
+                userData.nroute.fromXml(data);
+                if (!userData.nroute.name) {
+                    userData.nroute.name = fn;
+                }
+                return {
+                    name:userData.nroute.name
+                }
+            },
+            withDialog: true,
+            localAction: async (userData,name,file)=>{
+                if (!userData.nroute) throw new Error("no route after upload");
+                //when we are in disconnected mode we store the route locally
+                userData.nroute.setName(this.isConnected()?name:routeobjects.LOCAL_PREFIX+name);
+                await RouteHandler.saveRoute(userData.nroute);
+            },
+            checkName:(name,itemList,accessor)=>{
+                const pr=this.namePreCheck(name);
+                if (pr && pr.error) return pr;
+                return checkName(name,itemList,accessor);
+            }
+        })
+    }
+
+    nameToBaseName(name) {
+        if (this.fixedExtension && Helper.endsWith(name.toLowerCase(),"."+this.fixedExtension)){
+            name=name.substring(0,name.length-this.fixedExtension.length-1);
+        }
+        return routeobjects.nameToBaseName(name);
+    }
+
+    getCreateAction() {
+        return super.getCreateAction().copy({
+            doneAction:(action,name)=>{
+                const routeName=this.isConnected()?name:routeobjects.LOCAL_PREFIX+name;
+                return new routeobjects.Route(routeName);
+            },
+            checkName:(name,accessor,itemList)=>{
+                const pr=this.namePreCheck(name);
+                if (pr && pr.error) return pr;
+                return checkName(name,itemList,accessor);
+            }
+        });
+    }
+}
+
+class TrackItemActions extends ItemActions{
+    constructor() {
+        super('track');
+    }
+
+
+    showUpload() {
+        return super.showUpload() && globalStore.getData(keys.gui.capabilities.uploadTracks,false);
+    }
+
+    async buildExtendedInfo(item) {
+        return getTrackInfo(item)
+    }
+
+    getExtendedInfoRows(item) {
+        return TRACK_INFO_ROWS;
+    }
+
+    canModify(item) {
+        return this.isConnected();
+    }
+
+    canView(item) {
+        return Helper.getExt(item.name) === 'gpx';
+    }
+
+    fillActions(item, actions) {
+        actions.push(standardActions.delete.copy({
+            visible:this.isConnected(),
+            action: async (action,info,dialogContext)=> {
+                if (await deleteItem(info,dialogContext)){
+                    NavHandler.resetTrack();
+                    return true;
+                }
+            }
+        }));
+        actions.push(standardActions.rename.copy({
+            visible:this.isConnected(),
+        }))
+        actions.push(standardActions.copy.copy({
+            visible:this.isConnected() && item.size !== undefined && item.size < ViewPage.MAXEDITSIZE,
+            keepExtension:true,
+        }))
+        if (item.name) {
+            const ext=Helper.getExt(item.name);
+            if ( ext === 'gpx') {
+                actions.push(standardActions.view.copy({
+                    visible: true,
+                }))
+            }
+            else if (item.name.toLowerCase().endsWith('.nmea') || item.name.toLowerCase().endsWith('.nmea.gz')) {
+                actions.push(standardActions.view.copy({
+                    visible: true,
+                    action: async (action, item, dialogContext, history) => {
+                        dialogContext.replaceDialog(() => <LogDialog
+                            baseUrl={
+                                prepareUrl({
+                                    type: 'track',
+                                    command: 'download',
+                                    name: item.name
+                                })
+                            }
+                            title={item.name}
+                            dlname={item.downloadName||item.name}
+                            autoreload={ext === 'nmea'}
+                        />);
+                    }
+                }))
+            }
+        }
+        actions.push(standardActions.download.copy({}))
+        actions.push(standardActions.overlays.copy({
+            visible:this.canEditOverlays() && KNOWN_OVERLAY_EXTENSIONS.indexOf(Helper.getExt(item.name))>=0,
+        }))
+        actions.push(new Action({
+            name:'toroute',
+            label: 'ToRoute',
+            action:(action,info,dialogContext)=>{
+                dialogContext.replaceDialog(()=><TrackConvertDialog name={item.name}/>);
+            },
+            visible: Helper.getExt(item.name)==='gpx'
+        }))
+
+    }
+    build() {
+        this.allowedExtensions=['gpx'];
+        this.headline='Tracks';
+    }
+
+}
+class LayoutItemActions extends ItemActions{
+    constructor() {
+        super('layout');
+    }
+
+
+    canModify(item) {
+        return super.canModify(item) && ! item.active;
+    }
+
+    canView(item) {
+        return true;
+    }
+    namePreCheck(name){
+        if (! name) {
+            const d=new Date();
+            const proposal=`layout${d.getFullYear()}${d.getMonth()}${d.getDate()}`;
+            return {
+                error:'must not be empty',
+                proposal: proposal
+            }
+        }
+        if (name.endsWith('.'+this.fixedExtension)){
+            return {
+                error:'must not end with .'+this.fixedExtension,
+                proposal: name.substring(0,name.length-this.fixedExtension.length-1),
+            }
+        }
+        const up=layoutLoader.getUserPrefix();
+        if (name.startsWith(up)){
+            return {
+                error: 'must not start with '+up,
+                proposal: name.substr(up.length)
+            }
+        }
+    }
+    fillActions(item, actions) {
+        actions.push(standardActions.delete.copy({
+            visible: this.canModify(item) ,
+            action:async (action,item,dialogContext)=>{
+                if (! await deleteItemQuery(item,dialogContext))return;
+                await layoutLoader.deleteLayout(item.name)
+                await removeItemsFromOverlays(item);
+                return true;
+            }
+        }))
+        actions.push(standardActions.rename.copy({
+            visible:this.canModify(item),
+            keepExtension:false,
+            hasScope: true,
+            execute: async (item,newName)=>{
+                await layoutLoader.renameLayout(item.name,newName);
+                return true;
+            },
+            preCheck:(name)=>this.namePreCheck(name)
+
+        }))
+        actions.push(standardActions.copy.copy({
+            visible:this.isConnected(),
+            keepExtension:false,
+            hasScope: true,
+            fixedPrefix: layoutLoader.getUserPrefix(),
+            execute: async (item,newName)=>{
+                const layout=await layoutLoader.loadLayout(item.name);
+                await layoutLoader.uploadLayout(newName,layout);
+                return true;
+            },
+            nameToBaseName:(name)=>this.nameToBaseName(name)
+        }))
+        actions.push(standardActions.view.copy({
+            action: async (action,item,dialogContext,history) => {
+                const layout = await layoutLoader.loadLayout(item.name);
+                history.push('viewpage', {
+                    type: item.type,
+                    name: item.name,
+                    readOnly: true,
+                    ext:this.getExtensionForView(),
+                    data:JSON.stringify(layout,undefined,"  ")
+                });
+                return true;
+            },
+            fixedExtension:this.fixedExtension
+        }))
+        actions.push(standardActions.edit.copy({
+            visible: this.isConnected() && item.size !== undefined && item.size < ViewPage.MAXEDITSIZE && item.canDelete,
+            action: async (action,item, dialogContext,history) => {
+                const save=async (data)=>{
+                    return  await layoutLoader.uploadLayout(item.name, data, true, true)
+                }
+                const data=await fetchItem(item);
+                const res=await showPromiseDialog(dialogContext,(dp)=><EditDialog
+                    {...dp}
+                    data={data}
+                    title={item.displayName||item.name}
+                    language={'json'}
+                    saveFunction={save}
+                    fileName={item.downloadName}
+                />);
+                if (res) await save(res);
+                dialogContext.closeDialog();
+            }
+        }))
+        actions.push(standardActions.download.copy({
+            localData: ()=>fetchItem(item)
+        }))
+        const loadAndActivate=async (item)=>{
+            const layout=await layoutLoader.loadLayout(item.name);
+            layouthandler.setLayoutAndName(layout,item.name,true);
+        }
+        actions.push(new Action({
+            label: 'Activate',
+            name:'open',
+            visible:true,
+            action:async (action,item,dialogContext)=>{
+                const res=await showPromiseDialog(dialogContext,(dp)=><ConfirmDialog
+                    {...dp}
+                    text={"activate layout "+item.name+"?"}
+                />);
+                if (! res) return;
+                await loadAndActivate(item);
+                dialogContext.closeDialog();
+            }
+        }))
+        actions.push(new Action({
+            label: 'Editor',
+            name:'layout',
+            visible:this.isConnected() && item.name && item.name.startsWith(layoutLoader.getUserPrefix()),
+            action:async (action,item,dialogContext)=>{
+                const res=await showPromiseDialog(dialogContext,(dp)=><ConfirmDialog
+                    {...dp}
+                    text={"start layout editor for "+item.name+"?"}
+                />);
+                if (! res) return;
+                await loadAndActivate(item);
+                layouthandler.startEditing(item.name);
+                dialogContext.closeDialog();
+            }
+        }))
+    }
+
+    build() {
+        this.headline='Layouts';
+        this.hasScope=true;
+        this.fixedExtension='json';
+    }
+    showUpload() {
+        return super.showUpload() && globalStore.getData(keys.gui.capabilities.uploadLayout,false);
+    }
+
+    getUploadAction() {
+        return super.getUploadAction().copy({
+            localAction: async (userData,name,file)=>{
+                const data=await readTextFile(file);
+                await layoutLoader.uploadLayout(name,data);
+            }
+        });
+    }
+}
+
+class SettingsItemActions extends ItemActions{
+    constructor() {
+        super('settings');
+    }
+
+    canModify(item) {
+        return this.isConnected() && item.canDelete !== false && !item.active;
+    }
+
+    canView(item) {
+        return true;
+    }
+
+    fillActions(item, actions) {
+        const canModify= this.isConnected() && item.canDelete !== false && !item.active;
+        actions.push(standardActions.delete.copy({
+            visible: canModify,
+        }));
+        actions.push(standardActions.rename.copy({
+            visible:canModify,
+            keepExtension:false,
+            hasScope: true
+        }))
+        actions.push(standardActions.copy.copy({
+            visible:this.isConnected(),
+            keepExtension:false,
+            fixedPrefix: 'user.',
+            hasScope: true,
+            nameToBaseName:(name)=>this.nameToBaseName(name)
+        }))
+        actions.push(standardActions.view.copy({}))
+        actions.push(standardActions.edit.copy({
+            visible: canModify && item.size !== undefined && item.size < ViewPage.MAXEDITSIZE,
+            action: async (action,item, dialogContext,history) => {
+                const save=async (data)=>{
+                    await PropertyHandler.verifySettingsData(data, true,true)
+                    await Requests.postPlain({
+                        command:'upload',
+                        type:'settings',
+                        overwrite:true,
+                        completeName:true,
+                        name:item.name
+                    },data)
+                }
+                const data=await fetchItem(item);
+                const res=await showPromiseDialog(dialogContext,(dp)=><EditDialog
+                    {...dp}
+                    data={data}
+                    title={"Settings: "+(item.displayName||item.name)}
+                    language={'json'}
+                    saveFunction={save}
+                    fileName={item.downloadName}
+                />);
+                if (res) await save(res);
+                dialogContext.closeDialog();
+            }
+        }))
+        actions.push(standardActions.download.copy({}))
+    }
+
+    build() {
+        this.headline='Settings';
+        this.hasScope=true;
+        this.fixedExtension='json';
+    }
+    showUpload() {
+        return super.showUpload() && globalStore.getData(keys.gui.capabilities.uploadSettings,false);
+    }
+
+    getUploadAction() {
+        return super.getUploadAction().copy({
+            localAction: async (userData,name,file)=>{
+                const data=await readTextFile(file);
+                const verified=await PropertyHandler.verifySettingsData(data, true,true)
+                await PropertyHandler.uploadSettingsData(name,verified.data,false,false);
+            }
+        });
+    }
+}
+class UserItemActions extends ItemActions{
+    constructor() {
+        super('user');
+    }
+
+    showUpload() {
+        return super.showUpload() && globalStore.getData(keys.gui.capabilities.uploadUser,false);
+    }
+    canView(item) {
+        return standardActions.view.isVisible(item);
+    }
+    fillActions(item, actions) {
+        const canModify= this.canModify(item);
+        actions.push(standardActions.delete.copy({
+            visible: canModify,
+        }))
+        actions.push(standardActions.rename.copy({
+            visible:canModify,
+        }))
+        actions.push(standardActions.copy.copy({
+            visible:this.isConnected() && item.size !== undefined && item.size < ViewPage.MAXEDITSIZE,
+            keepExtension:true,
+        }))
+        actions.push(standardActions.view.copy({}))
+        actions.push(standardActions.edit.copy({
+            visible: canModify && item.size !== undefined && item.size < ViewPage.MAXEDITSIZE
+                && ViewPage.EDITABLES.indexOf(Helper.getExt(item.name)) >= 0
+        }))
+        actions.push(standardActions.download.copy({}))
+        actions.push(new Action({
+            name: 'userApp',
+            label: 'App',
+            action: async (action,item,dialogContext,history)=>{
+                dialogContext.replaceDialog((props) =>
+                    <UserAppDialog {...props} fixed={{url: item.url}} resolveFunction={() => {
+                    }}/>)
+            },
+            visible:this.isConnected() && Helper.getExt(item.name)==='html'
+        }))
+    }
+
+    build() {
+        this.headline='User';
+    }
+
+}
+class ImageItemActions extends ItemActions{
+    constructor() {
+        super('images');
+    }
+    canView(item) {
+        return standardActions.view.isVisible(item);
+    }
+    fillActions(item, actions) {
+        let canModify=this.canModify(item);
+        actions.push(standardActions.delete.copy({
+            visible: canModify,
+        }))
+        actions.push(standardActions.rename.copy({
+            visible:canModify,
+            keepExtension:true,
+        }))
+        actions.push(standardActions.view.copy({}))
+        actions.push(standardActions.download.copy({}))
+    }
+
+    build() {
+       this.headline = 'Images';
+       this.allowedExtensions = GuiHelpers.IMAGES;
+    }
+}
+
+class OverlayItemActions extends ItemActions{
+    constructor() {
+        super('overlay');
+    }
+    canView(item) {
+        return standardActions.view.isVisible(item);
+    }
+    fillActions(item, actions) {
+        let canModify=this.canModify(item);
+        actions.push(standardActions.delete.copy({
+            visible: canModify,
+        }))
+        actions.push(standardActions.rename.copy({
+            visible:canModify,
+            keepExtension:false,
+        }))
+        actions.push(standardActions.view.copy({}))
+        actions.push(standardActions.edit.copy({
+            visible: item.size !== undefined && item.size < ViewPage.MAXEDITSIZE &&
+                ViewPage.EDITABLES.indexOf(Helper.getExt(item.name)) >= 0
+                && canModify
+        }))
+        actions.push(standardActions.download.copy({}))
+        actions.push(standardActions.overlays.copy({
+            visible:this.canEditOverlays() && KNOWN_OVERLAY_EXTENSIONS.indexOf(Helper.getExt(item.name))>=0,
+        }))
+    }
+
+    build() {
+       this.headline = 'Overlays';
+    }
+    showUpload() {
+        return super.showUpload() && globalStore.getData(keys.gui.capabilities.uploadOverlays, false);
+    }
+
+}
+class PluginItemActions extends ItemActions{
+    constructor() {
+        super('plugins');
+    }
+
+    showUpload() {
+        return super.showUpload() && globalStore.getData(keys.gui.capabilities.uploadPlugins, false);
+    }
+
+
+    canModify(item) {
+        return item.canDelete &&  this.isConnected();
+    }
+
+    fillActions(item, actions) {
+        actions.push(standardActions.delete.copy({
+            visible: this.canModify(item),
+        }))
+        actions.push(standardActions.download.copy({}))
+        if (this.canModify(item)) {
+            actions.push(standardActions.config.copy({}))
+        }
+    }
+
+    build() {
+        this.headline='Plugins';
+        this.hasScope=true;
+        this.allowedExtensions=['zip'];
+    }
+
+    prefixForDisplay() {
+        return 'user-';
+    }
+
+    getUploadAction() {
+        return super.getUploadAction().copy({
+            preCheck: async (userData, name, file, dialogContext)=> {
+                const [fn, ext] = Helper.getNameAndExt(name);
+                const accessor = (data) => this.nameForCheck(data);
+                if (ext !== 'zip') throw new Error("only zip files for plugins");
+                const existingItems = await listItems(this.type);
+                const check = async (foundName) => {
+                    let existing = checkName(foundName);
+                    if (existing && existing.error) {
+                        throw new Error(`the found plugin ${foundName} has an invalid name: ${existing.error}`);
+                    }
+                    existing = checkName(foundName, existingItems, accessor);
+                    if (existing && existing.error) {
+                        const res = await showPromiseDialog(dialogContext, (dprops) => <ConfirmDialog
+                            {...dprops}
+                            title={`plugin ${foundName} already exists`}
+                            text={'Update the existing plugin?'}
+                        />);
+                        if (res) {
+                            return {
+                                name: foundName,
+                                final: true,
+                                options: {overwrite: true}
+                            }
+                        }
+                        return;
+                    }
+                    return {name: foundName,final:true};
+                }
+                if (typeof TransformStream == "undefined") {
+                    const foundName = fn;
+                    const res = await showPromiseDialog(dialogContext, (dprops) => <ConfirmDialog
+                        {...dprops}
+                        title={"Old browser"}
+                        text={"Your browser seems to be too old to check the zip file.\n" +
+                            "If the plugin directory is equal to the name of the zip we can import any way.\n" +
+                            "Try the import?"
+                        }
+                        className={'pre'}
+                    />)
+                    if (res) {
+                        return check(foundName);
+                    }
+                    return;
+                }
+                const foundName=await checkForPlugin(file);
+                return check(foundName);
+            }
+        })
+    }
+    async buildExtendedInfo(item) {
+        const fileList=await Requests.getJson({
+            type:'plugins',
+            command:'pluginInfo',
+            name:item.name
+        }).then((json)=>json.data)
+        const rt={
+            active: item.active
+        };
+        let status;
+        if (item.handlerId) {
+            status = await Requests.getJson({
+                type: 'config',
+                command: 'status',
+                handlerId: item.handlerId
+            }).then((json) => json.handler);
+        }
+        let cfgUrl;
+        for (let pi of fileList) {
+            if (pi.name === item.name){
+                let files="";
+                const flist=["js","mjs","css","cfg","python"];
+                for (let ft of flist){
+                    if (pi[ft] !== undefined) {
+                        if (files) files+=", "+ft;
+                        else files=ft;
+                        if (ft === 'cfg'){
+                            cfgUrl=pi[ft].url;
+                        }
+                    }
+                }
+                rt.files=files;
+            }
+        }
+        if (cfgUrl){
+            const config=await Requests.getJson(cfgUrl,{useNavUrl:false,checkOk:false,noCache:false});
+            if (config){
+                rt.version=config.version;
+                rt.description=config.description;
+            }
+        }
+        if (status && status.info && (status.info.items instanceof Array)){
+            for (let sti of status.info.items) {
+                if (sti.name === item.name){
+                    rt.status=sti.status;
+                    rt.info=sti.info;
+                }
+            }
+        }
+        return rt;
+    }
+
+    getExtendedInfoRows(item) {
+        return [
+            {label:'version',value:'version'},
+            {label:'active',value:'active',formatter:(v)=>v?"true":"false"},
+            {label:'parts',value:'files'},
+            {label:'status',value:'status',formatter:(v)=>{
+                    return <img className="status_image" src={statusTextToImageUrl(v)}/>
+                }},
+            {label:'info',value:'info'},
+            {label:'description',value:'description'},
+        ]
+    }
+}
+const ITEM_TYPE_ACTIONS={
+    chart: new ChartItemActions(),
+    route: new RouteItemActions(),
+    track: new TrackItemActions(),
+    layout: new LayoutItemActions(),
+    settings: new SettingsItemActions(),
+    user: new UserItemActions(),
+    images: new ImageItemActions(),
+    overlay: new OverlayItemActions(),
+    plugins: new PluginItemActions(),
+}
+
+export const createItemActions=(type)=>{
+    if (type instanceof Object) {
+        type=type.type
+    }
+    if (type){
+        const rt=ITEM_TYPE_ACTIONS[type];
+        if (rt) return rt;
+    }
+    return new ItemActions(type||'dummy');
+}
+
+const ALLCHARTS={label:'AllCharts',value: ''};
+const AddRemoveOverlayDialog = (props) => {
+    const dialogContext=useDialogContext();
+    const [chartList, setChartList] = useState([DEFAULT_OVERLAY_CHARTENTRY]);
+    const [chart, setChart] = useState(DEFAULT_OVERLAY_CHARTENTRY.name);
+    const [action, setAction] = useState('add');
+    const [changed, setChanged] = useState(false);
+    const [running,setRunning] = useState(false);
+    let titles = {add: "Add to Charts", remove: "Remove from Charts"}
+    useEffect(() => {
+        listItems('chart')
+            .then((data) => {
+                setChartList(
+                    chartList.concat(data)
+                )
+            })
+            .catch((error) => Toast("unable to read chart list: " + error));
+
+    }, []);
+    const findChart = useCallback((chartKey) => {
+        for (let i = 0; i < chartList.length; i++) {
+            if (chartList[i].name === chartKey) return chartList[i];
+        }
+    }, [chartList]);
+    const execute = useCallback(async () => {
+        if (action === 'add') {
+            let chartInfo = findChart(chart);
+            if (!chartInfo) return;
+            dialogContext.closeDialog();
+            EditOverlaysDialog.createDialog(chartInfo,
+                undefined,
+                props.current
+            );
+            return;
+        }
+        if (action === "remove") {
+            setRunning(true);
+            try {
+                const result = await removeItemsFromOverlays(undefined, [props.current]);
+                if (result.status !== 'OK') {
+                    throw new Error(result.status);
+                }
+                Toast(result.info);
+                dialogContext.closeDialog();
+            } catch (error) {
+                setRunning(false);
+                Toast("Error:" + error);
+            }
+        }
+    }, [action,chart]);
+    const getChartSelectionList = useCallback(() => {
+        if (action === 'remove'){
+            return [ALLCHARTS]
+        }
+        let rt = [];
+        chartList.forEach((chart) => {
+            if (!chart.name) return;
+            rt.push({label: chart.displayName||chart.name, value: chart.name});
+        })
+        return rt;
+    }, [action, chartList]);
+    const getCurrentChartValue = useCallback(() => {
+        const chartForDisplay=findChart(chart) || {};
+        return (
+            {
+                label: chartForDisplay.displayName||chartForDisplay.name,
+                value: chart
+            })
+    }, [action, chart]);
+    return (
+        <DialogFrame className="AddRemoveOverlayDialog" title={"On Charts"}>
+            {running && <DialogRow><span className={"spinner"}/></DialogRow>}
+            <DialogRow>
+                <span className="itemInfo">{props.current.name}</span>
+            </DialogRow>
+            <Radio
+                dialogRow={true}
+                label={"Action"}
+                value={action}
+                onChange={(v) => {
+                    setChanged(true);
+                    setAction(v);
+                }}
+                itemList={[{label: titles.add, value: "add"}, {label: titles.remove, value: "remove"}]}
+            />
+            {action === 'add'?
+            <InputSelect
+                dialogRow={true}
+                label="Chart"
+                value={getCurrentChartValue()}
+                onChange={(v) => {
+                    setChanged(true);
+                    setChart(v);
+                }}
+                changeOnlyValue={true}
+                itemList={getChartSelectionList()}
+            />:
+                <InputReadOnly
                     dialogRow={true}
                     label="Chart"
-                    value={this.getCurrentChartValue()}
-                    onChange={(v) => {
-                        this.setState({changed: true, chart: v})
+                    value={ALLCHARTS.label}
+                />}
+            <DialogButtons>
+                <DB name="cancel"
+                    disabled={running}
+                >Cancel</DB>
+                <DB name="ok"
+                    onClick={() => {
+                        execute();
                     }}
-                    changeOnlyValue={true}
-                    showDialogFunction={this.dialogHelper.showDialog}
-                    itemList={this.getChartSelectionList()}
-                />
-                <div className="dialogButtons">
-                    <DB name="cancel"
-                        onClick={()=>{
-                            this.props.closeCallback();
-                        }}
-                        >Cancel</DB>
-                    <DB name="ok"
-                        onClick={()=>{
-                            this.action();
-                            this.props.closeCallback()
-                        }}>Ok</DB>
-                </div>
-            </div>
-        )
-    }
+                    close={false}
+                    disabled={running}
+                >Ok</DB>
+            </DialogButtons>
+        </DialogFrame>
+    )
 }
-const INFO_ROWS=[
-
-];
-const TYPE_INFO_ROWS={
-    track: TRACK_INFO_ROWS,
-    route: ROUTE_INFO_ROWS
+AddRemoveOverlayDialog.propTypes = {
+    current: PropTypes.object.isRequired,
 }
-const INFO_FUNCTIONS={
-    track: getTrackInfo,
-    route: getRouteInfo
-};
-export default  class FileDialog extends React.Component{
-    constructor(props){
-        super(props);
-        this.state={
-            changed:false,
-            existingName:false,
-            name:props.current.name,
-            scheme:props.current.scheme,
-            allowed:ItemActions.create(props.current,globalStore.getData(keys.properties.connectedMode,true))
-        };
-        this.onChange=this.onChange.bind(this);
-        this.extendedInfo=stateHelper(this,{},'extendedInfo');
-    }
-    componentDidMount() {
-        let f=INFO_FUNCTIONS[this.props.current.type];
-        if (f){
-            f(this.props.current.name).then((info)=>{
-                this.extendedInfo.setState(info,true);
-            }).catch(()=>{});
-        }
-    }
-
-    infoRowDisplay(row,data){
-        let v=data[row.value];
-        if (v === undefined) return null;
-        if (row.formatter) v=row.formatter(v,data);
-        if (v === undefined) return null;
-        return <InfoItem label={row.label} value={v}/>
-    }
-    onChange(newName){
-        if (newName === this.state.name) return;
-        if (newName === this.props.current.name){
-            this.setState({
-                changed:false,
-                existingName:false,
-                name:newName
-            });
-            return;
-        }
-        let newState={name:newName,changed:true};
-        if (this.props.checkName){
-            newState.existingName=this.props.checkName(newName);
-        }
-        this.setState(newState)
-    }
-    render(){
-        let self=this;
-        let cn=this.state.existingName?"existing":"";
-        let rename=this.state.changed && ! this.state.existingName && (this.state.name !== this.props.current.name);
-        let schemeChanged=this.state.allowed.showScheme && (((this.props.current.scheme||"tms") !== this.state.scheme)|| this.props.current.originalScheme);
-        let extendedInfoRows=TYPE_INFO_ROWS[this.props.current.type];
-        return(
-            <React.Fragment>
-                <div className="fileDialog flexInner">
-                    <h3 className="dialogTitle">{this.props.current.name}</h3>
-                    {this.props.current.info !== undefined?
-                        <div className="dialogRow">
-                            <span className="itemInfo">{this.props.current.info}</span>
-                        </div>
-                        :
-                        null
-                    }
-                    {INFO_ROWS.map((row)=>{
-                        return this.infoRowDisplay(row,this.props);
-                    })}
-                    {extendedInfoRows && extendedInfoRows.map((row)=>{
-                        return this.infoRowDisplay(row,this.extendedInfo.getState());
-                    })}
-                    {(this.state.allowed.showScheme && this.props.current.originalScheme) &&
-                    <div className="dialogRow userAction">
-                    <span className="inputLabel">
-                        original DB scheme
-                    </span>
-                        <span className="value">
-                        {this.props.current.originalScheme}
-                    </span>
-
-                    </div>
-                    }
-                    {this.state.allowed.showScheme &&
-                    <Radio
-                        label="scheme"
-                        value={this.state.scheme}
-                        onChange={(v)=>{this.setState({changed:true,scheme:v})}}
-                        itemList={[{label:"xyz",value:"xyz"},{label:"tms",value:"tms"}]}
-                        className="mbtilesType"/>
-
-                    }
-                    {this.state.allowed.showRename ?
-                        <div className="dialogRow">
-                            <Input
-                                label={this.state.existingName?"existing":"new name"}
-                                className={cn}
-                                value={this.state.name}
-                                onChange={this.onChange}
-                            />
-                        </div>
-                        : null
-                    }
-                    <div className="dialogButtons">
-                        {(this.state.allowed.showRename || this.state.allowed.showScheme)?
-                            <DB name="ok"
-                                onClick={()=>{
-                                    self.props.closeCallback();
-                                    let action="";
-                                    if (rename) action+="rename";
-                                    if (schemeChanged){
-                                        if (this.props.current.scheme !== this.state.scheme) {
-                                            if (action === "") action = "scheme";
-                                            else action += ",scheme";
-                                        }
-                                    }
-                                    self.props.okFunction(action,
-                                        assign({},this.props.current,{name:this.state.name,scheme:this.state.scheme}));
-                                }}
-                                disabled={!rename && ! schemeChanged}
-                            >
-                                Change
-                            </DB>
-                            :
-                            null
-                        }
-                        {this.state.allowed.showDelete?
-                            <DB name="delete"
-                                onClick={()=>{
-                                    self.props.closeCallback();
-                                    self.props.okFunction('delete',this.props.current.name);
-                                }}
-                                disabled={this.state.changed}
-                            >
-                                Delete
-                            </DB>
-                            :
-                            null
-                        }
-                    </div>
-                    <div className="dialogButtons">
-                        {this.state.allowed.showImportLog &&
-                            <DB name={'log'}
-                                onClick={()=>{
-                                    this.props.closeCallback();
-                                    OverlayDialog.dialog((dprops)=>{
-                                        return <LogDialog {...dprops}
-                                                          baseUrl={getImportLogUrl(this.props.current.name)}
-                                                          title={'Import Log'}
-                                        />
-                                    })
-                                }}
-                                >Log</DB>
-                        }
-                        {this.state.allowed.showConvertFunction &&
-                            <DB name="toroute"
-                                onClick={()=>{
-                                    this.props.closeCallback()
-                                    this.props.okFunction('convert',this.props.current);
-                                }}
-                                >Convert</DB>
-                        }
-                        {(this.state.allowed.showView )?
-                            <DB name="view"
-                                onClick={()=>{
-                                    self.props.closeCallback();
-                                    self.props.okFunction('view',this.props.current);
-                                }}
-                                disabled={this.state.changed}
-                            >
-                                View
-                            </DB>
-                            :
-                            null}
-                        {(this.state.allowed.showEdit)?
-                            <DB name="edit"
-                                onClick={()=>{
-                                    self.props.closeCallback();
-                                    self.props.okFunction('edit',this.props.current);
-                                }}
-                                disabled={this.state.changed}
-                            >
-                                Edit
-                            </DB>
-                            :
-                            null
-                        }
-                        {(this.state.allowed.showOverlay)?
-                            <DB name="overlays"
-                                onClick={()=>{
-                                    self.props.closeCallback();
-                                    self.props.okFunction('overlay',this.props.current);
-                                }}
-                                disabled={this.state.changed}
-                            >
-                                Overlays
-                            </DB>
-                            :
-                            null
-                        }
-                        <ItemDownloadButton
-                            name="download"
-                            disabled={this.state.changed}
-                            item={this.props.current || {}}
-                            useDialogButton={true}
-                            onClick={this.props.closeCallback}
-                        >
-                            Download
-                        </ItemDownloadButton>
-                        {(this.state.allowed.showApp) &&
-                        <DB name="userApp"
-                            onClick={()=>{
-                                this.props.closeCallback();
-                                this.props.okFunction('userapp',this.props.current);
-                            }}
-                            disabled={this.state.changed}
-                        >
-                            App
-                        </DB>
-
-                        }
-                        <DB name="cancel"
-                            onClick={self.props.closeCallback}
-                        >
-                            Cancel
-                        </DB>
-                    </div>
-                </div>
-            </React.Fragment>
-        );
-    }
+const infoRowDisplay=(row,data)=>{
+    let v=data[row.value];
+    if (v === undefined) return null;
+    if (row.formatter) v=row.formatter(v,data);
+    if (v === undefined) return null;
+    return <InfoItem label={row.label} value={v}/>
 }
-const buildRequestParameters=(request,item,opt_additional)=>{
-    return assign({},Helper.filteredAssign(additionalUrlParameters,item),
-        opt_additional,
-        {
-            request: request,
-            type: item.type,
-            name:item.name
-        })
-}
-export const deleteItem=(info,opt_resultCallback)=> {
-    let doneAction=()=> {
-        if (opt_resultCallback) opt_resultCallback(info);
-    };
-    let ok = OverlayDialog.confirm("delete " + info.name + "?");
-    ok.then(function () {
-        if (info.type === 'layout') {
-            LayoutHandler.deleteItem(info.name)
-                .then((res)=> {
-                    doneAction();
-                })
-                .catch((err)=>{
-                    Toast("unable to delete layout "+info.name+": "+err);
-                    doneAction();
-                });
-            return;
-        }
-        if (info.type !== "route") {
-            Requests.getJson('', {}, buildRequestParameters('delete',info))
-                .then(() => {
-                    if (info.type === 'track') {
-                        NavHandler.resetTrack();
-                    }
-                    doneAction();
-                })
-                .catch((error) => {
-                    Toast("unable to delete " + info.name + ": " + error);
-                    doneAction();
-                })
-        } else {
-            if (RouteHandler.isActiveRoute(info.name)) {
-                Toast("unable to delete active route");
-                doneAction();
-            }
-            RouteHandler.deleteRoute(info.name,
-                () => {
-                    doneAction();
-                },
-                (rinfo) => {
-                    Toast("unable to delete route: " + rinfo);
-                    doneAction();
-                },
-                !info.server //if we think this is a local route - just delete it local only
+export const FileDialog = (props) => {
+    const allowed=createItemActions(props.current.type);
+    const [extendedInfo, setExtendedInfo] = useState({});
+    useEffect(() => {
+        allowed.buildExtendedInfo(props.current)
+        .then(
+                (info)=>setExtendedInfo(info),
+                ()=>{}
             );
-        }
-    });
-    ok.catch(function () {
-        base.log("delete canceled");
-        doneAction();
-    });
-};
+    }, [props.current.type]);
 
-export const showFileDialog=(history,item,opt_doneCallback,opt_checkExists)=>{
-    let actionFunction=(action,newItem)=>{
-        let doneAction=(pageChanged)=>{
-            if (opt_doneCallback){
-                opt_doneCallback(action,newItem,pageChanged)
-            }
-        };
-        let schemeAction=(newScheme)=>{
-            return Requests.getJson('',{},
-                buildRequestParameters('api',item,
-                    {command:'scheme',newScheme:newScheme}));
-        };
-        let renameAction=(name,newName)=>{
-            Requests.getJson('',{},
-                buildRequestParameters('api',item,
-                    {command:'rename',newName:newName}))
-                .then(()=>{
-                    doneAction();
-                })
-                .catch((error)=>{
-                    Toast("rename failed: "+error);
-                    doneAction();
-                });
-        };
-        if (action.match(/scheme/)){
-            schemeAction(newItem.scheme)
-                .then(()=>{
-                    if (action.match(/rename/)) renameAction(item.name,newItem.name);
-                    doneAction();
-                })
-                .catch((error)=>{
-                    Toast("change scheme failed: "+error);
-                    if (action.match(/rename/)) renameAction(item.name,newItem.name);
-                    doneAction();
-                });
-            return;
-        }
-        if (action === 'rename'){
-            return renameAction(item.name,newItem.name);
-        }
-        if (action === 'view'){
-            doneAction(true);
-            history.push('viewpage',{type:item.type,name:item.name,readOnly:true});
-            return;
-        }
-        if (action === 'edit'){
-            if (item.type === 'route'){
-                RouteHandler.fetchRoute(item.name,!item.server,
-                    (route)=>{
-                        let editor=new RouteEdit(RouteEdit.MODES.EDIT);
-                        editor.setNewRoute(route,0);
-                        doneAction(true);
-                        history.push('editroutepage',{center:true});
-                    },
-                    (error)=>{
-                        Toast(error);
-                        doneAction();
-                    });
-                return;
-            }
-            doneAction(true);
-            history.push('viewpage',{type:item.type,name:item.name});
-            return;
-        }
-        if (action === 'userapp'){
-            UserAppDialog.showUserAppDialog(undefined, {url:item.url})
-                .then((data)=>doneAction())
-                .catch((error)=>doneAction());
-        }
-        if (action === 'delete'){
-            return deleteItem(item,()=>doneAction());
-        }
-        if (action === 'overlay'){
-            doneAction();
-            if (item.type === 'chart') {
-                return EditOverlaysDialog.createDialog(item )
-            }
-            else{
-                OverlayDialog.dialog((props)=>{
-                    return(
-                        <AddRemoveOverlayDialog
-                            {...props}
-                            current={item}
-                            />
-                        )
-                });
-                return;
+    let extendedInfoRows = allowed.getExtendedInfoRows(props.current);
+    const dialogButtons=allowed.getActionButtons(props.current);
+    const doneAction=useCallback((res)=>{
+        if (res) Toast(res);
+        if (props.okFunction)props.okFunction()
+    },[props.okFunction])
+    dialogButtons.forEach(button=>{
+        const onClick=button.onClick;
+        if (onClick){
+            button.onClick=async(ev,dialogContext)=>{
+                try{
+                    const res=await onClick(ev,dialogContext);
+                    doneAction(res);
+                }catch (e){
+                    doneAction(e);
+                }
             }
         }
-        if ( action === 'convert'){
-            let convertFunction=showConvertFunctions[newItem.type];
-            if (convertFunction){
-                convertFunction(history,newItem);
+    })
+    return (
+        <DialogFrame className="fileDialog" title={props.current.displayName||props.current.name}>
+            {props.current.info !== undefined ?
+                <DialogRow>
+                    <span className="itemInfo">{props.current.info}</span>
+                </DialogRow>
+                :
+                null
             }
-            return;
-        }
-    };
-    OverlayDialog.dialog((props)=>{
-        return(
-            <FileDialog
-                {...props}
-                okFunction={actionFunction}
-                current={item}
-                checkName={opt_checkExists}
-            />
-        );
-    });
-};
+            {allowed.getInfoRows(props.current).map((row)=>{
+                return infoRowDisplay(row,props.current)
+            })}
+            {extendedInfoRows && extendedInfoRows.map((row) => {
+                return infoRowDisplay(row, extendedInfo);
+            })}
+            <DialogButtons buttonList={dialogButtons}>
+                <DB name="cancel"
+                >
+                    Cancel
+                </DB>
+            </DialogButtons>
+        </DialogFrame>
+    );
+
+}
+
+FileDialog.propTypes = {
+    current: PropTypes.object.isRequired,
+    okFunction: PropTypes.func
+}

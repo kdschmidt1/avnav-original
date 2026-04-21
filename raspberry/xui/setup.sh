@@ -14,12 +14,6 @@ copyErr(){
     cp "$1" "$2" || err "unable to copy $1 to $2"
 }
 
-copyNE(){
-    if [ ! -f $1/$2 ] ; then
-        cp $pdir/$2 $1/$2
-    fi
-}
-
 pinFile=libgtk-3-0-pin
 reinstalls=""
 if [ -f "$pdir/$pinFile" ] ; then
@@ -44,14 +38,14 @@ fi
 if [ "$reinstalls" != "" ] ; then
     apt-get install --reinstall -y --allow-downgrades $reinstalls
 fi
-apt-get install python-xdg || apt-get install python3-xdg || err "unable to install"
+apt-get install -y python-xdg || apt-get install -y python3-xdg || err "unable to install"
 apt-get install -y --no-install-recommends xserver-xorg-video-all \
   xserver-xorg-input-all xserver-xorg-core xinit x11-xserver-utils \
   onboard  at-spi2-core onboard-data mousetweaks gir1.2-ayatanaappindicator3-0.1 gir1.2-atspi-2.0 \
   openbox lxterminal dconf-cli firefox-esr dbus-x11 python3-xlib \
   nemo xfce4-panel mousepad xdotool menu libglib2.0-bin || err "unable to install"
+apt-get install -y gldriver-test || echo "gldriver-test not installed, X11 will not run on newer Pis"
 
-copyNE /boot avnav.conf 
 cp $pdir/avnav-startx.service /etc/systemd/system || err
 systemctl daemon-reload
 
@@ -67,13 +61,6 @@ chown pi:pi $HOME/.xinitrc
 
 copyErr $pdir/Xwrapper.config /etc/X11 
 
-ffprofile="$HOME/.mozilla/firefox/avnav"
-
-if [ ! -d "$ffprofile" ] ; then
-    mkdir -p "$ffprofile" || err "unable to create $ffprofile"
-fi
-cp -r $pdir/firefox-profile/* "$ffprofile" || err "unable to copy profile data"
-chown -R pi:pi "$HOME/.mozilla"
 
 cp $pdir/onboard.conf "$HOME"
 chown pi:pi "$HOME/onboard.conf"
@@ -99,10 +86,6 @@ fi
 
 systemctl enable avnav-startx
 
-echo "setup done, use systemctl start avnav-startx after editing /boot/avnav.conf"
+echo "setup done, use systemctl start avnav-startx after editing $BOOTDIR/avnav.conf"
 echo "use sudo systemctl start avnav to start the avnav server if you don't reboot"
 
-
-
-
-  

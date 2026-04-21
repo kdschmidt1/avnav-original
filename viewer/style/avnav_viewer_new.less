@@ -21,12 +21,8 @@
 //general page set up
 //----------------------------------------------------------------------------------------
 
-input {
-  border: 2px inset;
-  .nightBackColor(inherit,#646463)
-}
+
 html,body {
-  .nightColors();
   height: 100%;
   width: 100%;
   margin: 0;
@@ -43,13 +39,12 @@ body{
   width: 100%;
   height: 100%;
   overflow: hidden;
+  position: relative;
+  z-index: 2;
 }
 .pageFrame{
-  background-color: white;
-  &.nightMode{
-    background-color: #000;
-    color: @nightColor;
-  }
+  background-color: var(--avnav-back-color);
+  color: var(--avnav-fore-color);
 }
 
 .dimm {
@@ -73,8 +68,8 @@ body{
   bottom: 0;
   right: 0;
   &.editing{
-    border: 4px solid;
-    .nightBorderFade(@editingColor);
+    border: @borderAttentionLarge;
+    border-color: var(--avnav-attention-color);
   }
 }
 
@@ -82,7 +77,7 @@ body{
   .flex-display();
   .flex-direction(column);
   position: relative;
-  .nightBackFade(@colorMain);
+  background-color: var(--avnav-main-color);
   &.wrap{
     overflow: hidden;
     .flex-wrap(wrap-reverse)
@@ -116,7 +111,8 @@ body{
   bottom: 0;
   z-index: 101; //above widgets
   &.shade{
-    background-image: linear-gradient(to right,fade(@colorMain,10), fade(@colorMain,20));
+    background-color: var(--avnav-main-color);
+    opacity: 0.15;
   }
 }
 .iconContainer {
@@ -124,17 +120,26 @@ body{
   right: 1em;
   top: 1em;
   z-index: 3;
-
-  .anchorWatchIcon {
-    background-color: red;
-    .maskImage('anchor.svg');
-  }
-
-  .disconnectedIcon {
-    background-color: red;
-    .maskImage('plug-disconnect.svg');
-  }
 }
+.anchorWatchIcon {
+  background-color: red;
+  .maskImage('anchor.svg');
+}
+
+.disconnectedIcon {
+  background-color: red;
+  .maskImage('plug-disconnect.svg');
+}
+.measureIcon {
+  background-color: red;
+  .maskImage('straighten.svg');
+}
+.jsChangeIcon{
+  background-color: red;
+  .maskImage('javascript.svg');
+  transform: scale(2) translate(0, -0.1em);
+}
+
 
 
 .leftPart{
@@ -146,14 +151,14 @@ body{
 }
 
 .header{
-  height: @headlineHeight;
+  height: var(--avnav-headline-height);
   padding: 1em;
-  .nightBackFade(@colorMain);
-  .nightForeColor(white,@nightColor);
+  background-color: var(--avnav-main-color);
+  color:var(--avnav-fore-color-inv);
   font-weight: bold;
   .flex-shrink(0);
   &.connectionLost{
-    .nightBackFade(@colorRed);
+    background-color: var(--avnav-attention-color);
   }
 }
 
@@ -162,8 +167,7 @@ body{
 }
 
 .footer{
-    background-color: @colorSecond;
-  .nightColors();
+  background-color: var(--avnav-second-color);
   .flex-shrink(0);
 }
 
@@ -183,15 +187,33 @@ body{
   display: none;
 }
 
+.pre{
+  white-space: pre;
+}
 
-
+.selectedItem {
+  background-color: var(--avnav-select-color);
+  font-weight: bold;
+}
+.activeEntry{
+  .selectedItem();
+}
 //----------------------------------------------------------------------------------------
 //dialogs
 //----------------------------------------------------------------------------------------
+#___uploadInput{
+  position: fixed;
+  z-index: 1;
+  top: 0;
+  left: 0;
+}
+.noEvents{
+  pointer-events: none;
+}
 .overlay_cover_active {
   background-color: rgba(0, 0, 0, 0.35);
   display: block;
-  position: fixed;
+  position: absolute;
   left: 0;
   top: 0;
   right: 0;
@@ -203,45 +225,88 @@ body{
   .flex-align-items(center);
 }
 
+.dialogAnchor{
+  position: relative;
+}
 
+.rowBase{
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+@dialogInputLabelWidth:7em;
 
 .dialog {
-  & > div{
+  &.fullscreen{
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0;
+    .flexInner{
+      width: 100%;
+    }
+  }
+  & > div {
     min-width: 0;
   }
-  font-size: 1.1em;
+
   z-index: 121;
   padding: 0.6em;
-  background-color: white;
+  background-color: var(--avnav-dialog-color);
+  color: var(--avnav-fore-color);
   border-radius: 3px;
   .flex-display();
-  .nightColors();
   .mdShadow2();
-  &.nested{
+
+  &.nested {
     font-size: 1em;
   }
+
   overflow: auto;
   max-height: 100%;
   max-width: 100%;
-  .flexInner{
+
+  .flexInner {
     .flex-display();
     .flex-direction(column);
   }
-
-
-  input, .input {
-    font-size: inherit;
-    font-family: inherit;
-    max-width: 100%;
+  .dialogObjects();
+}
+.dialogObjects{
+  .inputFrame{
     width: 20em;
     min-width: 5em;
-    border: none;
-    border-bottom: 1px solid;
-    .nightBorderColorGR();
+    max-width: 100%;
     display: inline-block;
+  }
+
+  input, .input {
+    .inputFrame();
+    font-size: inherit;
+    font-family: inherit;
+    border: none;
+    border-bottom: @normalBorder;
+    border-color: var(--avnav-border-color);
     vertical-align: middle;
     line-height: 2em;
-    min-height: 2em;
+    height: 2.1em;
+    //margins to allow outline
+    margin-top: 2px;
+    margin-bottom: 2px;
+    outline: none;
+    color: var(--avnav-fore-color);
+    background-color: var(--avnav-back-color);
+    &:focus {
+      outline: @borderAttention;
+      outline-color: var(--avnav-border-color);
+    }
+  }
+  .error input, .error .input{
+    border: @borderAttention;
+    border-color: var(--avnav-attention-color);
   }
 
   .disabled .input{
@@ -256,7 +321,7 @@ body{
 
   .inputLabel{
     .mdText2();
-    width: 7em;
+    width: @dialogInputLabelWidth;
     display: inline-block;
     margin-right: 0.5em;
     font-size: 0.8em;
@@ -269,33 +334,21 @@ body{
     .inputLabel();
     width: unset;
   }
+  .iconInput .input,.colorSelector .input {
+    .flex-display();
+    .flex-direction(row);
+    .flex-align-items(center);
+  }
 
 
   button:not(.dialogButton,.smallButton){
     .dialogButton();
   }
 
-  .selectDialog {
-    .flex-display();
-    .flex-direction(column);
-    overflow: auto;
-    padding-bottom: 1em;
-    .selectList {
-      .flex(1);
-      .flex-shrink(0);
-      .flex-basis(auto);
-    }
 
-    .selectedItem {
-      .nightBackFade(@colorSelection);
-    }
-  }
 
   .dialogRow{
-    .flex-display();
-    .flex-direction(row);
-    .flex-align-items(center);
-    line-height: 1.5em;
+    .rowBase();
     &.infoText{
         white-space: pre-wrap;
     }
@@ -305,14 +358,12 @@ body{
     margin-top: 0.5em;
     .dialogRow();
     .flex-justify-content(flex-end);
-    .flex-wrap(wrap)
   }
   .insertButtons{
     .dialogRow();
-    border-bottom: 1px solid;
-    .nightBorderColorGR(30);
+    border-bottom: @normalBorder;
+    border-color: var(--avnav-border-color);
     .flex-justify-content(flex-end);
-    .flex-wrap(wrap)
   }
   .smallButton{
     width: 1.5em;
@@ -320,15 +371,29 @@ body{
   }
   .missing{
     input, .input {
-      .nightBorderFade(@colorRed);
+      border-color: var(--avnav-attention-color);
     }
   }
-  .error{
-    input, .input {
-      .nightBackFade(fade(@colorRed,50%));
-    }
+  .errorText{
+    color: var(--avnav-attention-color)
+  }
+  .paramButtons {
+    .flex-display();
+    .flex-direction(row);
   }
 
+}
+
+.editParam{
+  input{
+    font-weight: unset;
+  }
+  &.changed{
+    font-weight: bold;
+  }
+  &.defaultValue{
+    font-style: italic;
+  }
 }
 
 .editWidgetDialog, .editPageDialog{
@@ -336,13 +401,12 @@ body{
     .flex-shrink(0);
   }
   .inputLabel {
-    width: 8em;
+    width: 10em;
     text-align: start;
   }
   input, .input{
     min-width: 9em;
     max-width: 90vw;
-    width: auto;
     overflow-x: hidden;
     text-overflow: ellipsis;
     margin-left: 0;
@@ -371,8 +435,8 @@ body{
 }
 .editPageDialog{
   .panelList{
-    border-top: 1px solid;
-    .nightBorderColorGR(40);
+    border-top: @normalBorder;
+    border-color: var(--avnav-border-color);
     margin-top: 0.3em;
     padding-top: 0.3em;
   }
@@ -385,8 +449,8 @@ body{
 
   .editPanel {
     margin-top: 0.3em;
-    border-bottom: 1px solid;
-    .nightBorderColorGR(20);
+    border-bottom: @normalBorder;
+    border-color: var(--avnav-border-color);
     & >div{
       display: inline-block;
     }
@@ -399,80 +463,57 @@ body{
   .combinationSelect,.modeSelect{
       .label, .inputLabel {
         width: 4em;
+        word-break: break-word;
       }
   }
   .currentHeadline {
     margin-bottom: 0.3em;
   }
   .selectCurrent{
-    border-top: 1px solid;
-    .nightBorderColorGR(40);
+    border-top: @normalBorder;
+    border-color: var(--avnav-border-color);
     margin-top: 0.5em;
     padding-top: 0.5em;
   }
 }
 
-.overlayElement{
-  &.sortableHelper {
-    z-index: 130; //for dragdrop
-  }
-  .flex-display();
-  .flex-direction(row);
-  padding: 0.5em;
-  @media(max-width: 35em){
-    .flex-direction(column);
-    .flex-align-items(flex-start);
-    .itemInfo{
-      margin-right: 0!important;
+.selectIconDialog{
+  .checkBoxRow{
+    .inputLabel{
+      width: unset;
+      margin-right: unset;
+      margin-left: 1em;
     }
   }
-  .itemInfo{
-    .flex-grow(1);
-    margin-right: 1em;
-  }
-  .inputLabel{
-    .flex-shrink(0);
-    width: 6em;
-  }
-  .infoRow,.actions{
-    .flex-display();
-    .flex-direction(row);
-  }
-  .infoRow{
-    @media(max-width: 20em){
-      .flex-direction(column);
-      .flex-align-items(flex-start);
-
-    }
-    .valueText{
-      word-break: break-all;
-    }
+  .selectedItem {
+    background-color: var(--avnav-select-color);
   }
 }
+
+.RouteSyncDialog{
+  .dialogRow .radioLabel{
+    width: 10em;
+  }
+  .allowServer .inputLabel{
+    width: 10em
+  }
+}
+
 .editOverlaysDialog{
-  .actions{
-    .flex-display();
-    .flex-direction(row);
-  }
-  button.smallButton.disabled {
-    opacity: 0;
-    pointer-events: none;
-  }
-  .overlayEnabled {
-    .inputLabel {
-      display: none;
-    }
-  }
-  .overlayElement.disabled{
-    .valueText{
+  .overlayItems .disabled{
+    .itemInfo{
       .mdText2();
     }
   }
+
   &.preventEdit{
     .button.Edit {
       opacity: 0;
       pointer-events: none;
     }
+  }
+  &.hideErrors .withError{
+    display: none;
   }
   .overlayItems{
     padding-right: 35px; /* some room for scrolling */
@@ -482,7 +523,11 @@ body{
 
 .editOverlayItemDialog{
   .inputLabel{
-    width: 9em;
+    width: 10em;
+  }
+  .radioFrame .radioInner .inputLabel{
+    width: 4em;
+    text-align: right;
   }
 }
 .FeatureInfoDialog{
@@ -492,10 +537,53 @@ body{
   }
 
 }
+.featureListDialog, .FeatureInfoDialog{
+  .icon.route{
+    .iconImage('route.svg')
+  }
+  .icon.track{
+    .iconImage('track.svg')
+  }
+  .icon.chart{
+    .iconImage('map2.svg')
+  }
+  .icon.overlay{
+    .iconImage('layers-black.svg');
+  }
+  .icon.waypoint{
+    .iconImage('waypoint.svg');
+  }
+  .icon.anchor{
+    .iconImage('anchor.svg');
+  }
+  .icon.measure{
+    .iconImage('straighten.svg');
+  }
+  .icons{
+    width: 4em;
+    display: inline-block;
+  }
+  .ImageIcon{
+    .flex-display();
+    .flex-direction(row);
+    img{
+      .flex-grow(1);
+      .flex-shrink(1);
+      min-width: 0;
+    }
+  }
+}
 .featureInfoHtml{
   white-space: pre;
   margin-left: 1em;
+  .featureInfoListHtml &{
+    margin: 0.5em;
+    border-bottom: @normalBorder;
+    border-color: var(--avnav-border-color);
+    white-space: unset;
+  }
 }
+
 
 .TrackInfoDialog{
 
@@ -514,7 +602,7 @@ body{
     margin-left: 7.4em;
     max-width: 15em;
     font-size: 0.8em;
-    .nightForeColor(@colorRed)
+    color: var(--avnav-attention-color)
   }
 }
 
@@ -525,10 +613,6 @@ body{
 .EditHandlerDialog{
   .inputLabel{
     width: 9em;
-  }
-  .paramButtons {
-    .flex-display();
-    .flex-direction(row);
   }
 }
 .downloadFrame{
@@ -543,6 +627,11 @@ body{
   }
   max-width: 90vw;
   max-height: 90vh;
+}
+.dialog .ErrorDetails{
+  .dialogText {
+    white-space: pre-line;
+  }
 }
 
 //-- Color Picker
@@ -629,19 +718,44 @@ body{
 //----------------------------------------------------------------------------------------
 //lists
 //----------------------------------------------------------------------------------------
-.listContainer.scrollable{
+
+.scrollable{
   overflow: auto;
 }
 .listEntry{
-  overflow: hidden;
+  .rowBase();
+  min-height: 3.2em;
   position: relative;
-  border-bottom: 1px solid;
+  border-bottom: @normalBorder;
   padding: 1em;
-  .nightBorderColorGR(30);
-  .flex-display();
+  border-color: var(--avnav-border-color);
+  .icon{
+    margin-right: 0.5em;
+  }
 }
-.activeEntry{
-  .nightBackColor(@colorSelection);
+.listSlot{
+  margin-left: 12px;
+  &:first-of-type{
+    margin-left:0;
+  }
+  margin-right: 12px;
+  &:last-of-type{
+    margin-right: 0;
+  }
+  display: flex;
+  flex-direction: row;
+  &.listMain{
+    flex-direction: column;
+    flex: 1;
+    flex-basis: 8em;
+    .primary{
+
+    }
+    .secondary{
+      .mdText2();
+      margin-top: 0.2em;
+    }
+  }
 }
 
 //----------------------------------------------------------------------------------------
@@ -658,9 +772,8 @@ span.valuePrefix{
   position: fixed;
   left: 50px;
   bottom: 10px;
-  background-color: #383838;
-  color: #F0F0F0;
-  .nightColors();
+  background-color: var(--avnav-toast-color);
+  color: var(--avnav-fore-color-inv);
   font-size: 1.5em;
   padding: 1em;
   text-align: center;
@@ -682,8 +795,8 @@ span.valuePrefix{
 //-- WaypointItem
 
 .routeInfoPoint{
-  border-bottom: 1px solid;
-  .nightBorderColorGR();
+  border-bottom: @normalBorder;
+  border-color: var(--avnav-border-color);
   padding-left: 0.1em;
   padding-right: 0.3em;
   padding-top: 0.1em;
@@ -692,21 +805,6 @@ span.valuePrefix{
   position: relative;
 }
 
-//--WaypointListItem
-.waypointListItem{
-  .flex-display();
-  .flex-align-items(center);
-  .name{
-    width: 8em;
-    min-width: 8em;
-    margin-left: 1em;
-    white-space: pre-wrap;
-    margin-right: 1em;
-  }
-  .info{
-    .mdText2();
-  }
-}
 
 //--Checkbox
 
@@ -724,24 +822,35 @@ span.valuePrefix{
 }
 
 //--Radio button
-.radioInner {
-  .inputLabel{
-    width: auto;
-    margin-left: 1em;
-  }
-  .radio {
-    display: inline-block;
-    width: 1.8em;
-    height: 1.8em;
-    .iconImage('radio_button_unchecked.svg');
-    background-repeat: no-repeat;
-    background-size: cover;
-    &.checked {
-      .iconImage('radio_button_checked.svg');
+.radioFrame {
+  .flex-display();
+  .flex-direction(row);
+  .flex-wrap(wrap);
+  .radioInner {
+    .inputLabel {
+      width: auto;
+      margin-left: 1em;
     }
-    vertical-align: middle;
+
+    .radio {
+      display: inline-block;
+      width: 1.8em;
+      height: 1.8em;
+      .iconImage('radio_button_unchecked.svg');
+      background-repeat: no-repeat;
+      background-size: cover;
+
+      &.checked {
+        .iconImage('radio_button_checked.svg');
+      }
+
+      vertical-align: middle;
+    }
+
+    .flex-display(inline);
+    .flex-direction(row);
+    .flex-align-items(center);
   }
-  display: inline-block;
 }
 
 //--ColorSelector
@@ -762,11 +871,22 @@ span.valuePrefix{
   background-size: contain;
   display: inline-block;
   background-repeat: no-repeat;
+  background-position: center;
   .nightOPacity();
+  .widgetHead &{
+    margin:0;
+    height: 0.8em;
+    width: 0.8em;
+  }
+  vertical-align: middle;
 }
 .iconImage(@url){
   .icon();
   background-image: url("@{iconBase}/@{url}");
+}
+.oldIconImage(@url){
+  .icon();
+  background-image: url("@{oldiconBase}/@{url}");
 }
 .maskImage(@url){
   .icon();
@@ -790,7 +910,7 @@ span.valuePrefix{
 
 // entry that needs action
 .userAction{
-  color: @colorRed
+  color: var(--avnav-attention-color)
 }
 
 //--errorInfo
@@ -832,537 +952,581 @@ span.valuePrefix{
   opacity: 0;
   margin: 0;
 }
-//----------------------------------------------------------------------------------------
-//pages
-//----------------------------------------------------------------------------------------
-#mainpage{
-  .chartItem{
-    cursor: pointer;
-    overflow: hidden;
-    width: 22em;
-    max-width: 100%;
-    .flex-display(inline);
-    .flex-direction(row);
-    .flex-align-items(center);
-    margin-right: 3em;
-    padding: 1em;
-    padding-right: 0;
-    line-height: 2em;
-    border-bottom: 1px solid;
-    border-color: rgba(0, 0, 0, 0.3);
-    .more {
-      display: inline-block;
-      float: right;
-      width: 1em;
-      height: 1em;
-      background-image: url('../images/icons-new/ic_chevron_right.svg');
-      background-size: 100% 100%;
-      opacity: 0.6;
-    }
-    img {
-      .nightOPacity();
-      width: 1.3em;
-      height: 1.3em;
-      border-radius: 50%;
-      margin-right: 1em;
-      vertical-align: middle;
-    }
-    .chartName{
-      .flex(1);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    &.noOverlays .smallButton.MainOverlays {
-      opacity: 0.4;
-    }
+//-- spinner
+@keyframes spinner {
+  to {transform: rotate(360deg);}
+}
 
-
+.spinner {
+  display: inline-block;
+  margin-left: 2em;
+  vertical-align: middle;
+  width: 1.5em;
+  height: 1.5em;
+  border-radius: 50%;
+  border: 2px solid;
+  border-color: var(--avnav-fore-color);
+  border-top-color: #00000000;
+  .dialog &{
+    border-color: var(--avnav-border-color);
+    border-top-color: #00000000;
   }
-  .footer{
-    height: 3.2em;
-    .inner{
-      font-size: 0.8em;
-      padding-top: 0.8em;
-      width: 100%;
-      .status{
-        padding-left: 1em;
-        padding-right: 1em;
-        text-align: left;
-        z-index: 10;
-        white-space: nowrap;
-        display: inline-block;
-        margin-bottom: 0.2em;
-      }
-      .status_image {
-        width: 1.5em;
-        height: 1.5em;
-        vertical-align: middle;
-        .nightOPacity();
-      }
-      .link{
-        text-align: right;
-        padding-right: 1em;
-        white-space: nowrap;
+  .nightMode .dialog &{
+    border-top-color: #00000000;
+  }
+    animation: spinner .8s linear infinite;
+  }
+
+.status_image {
+  width: 1.5em;
+  height: 1.5em;
+  vertical-align: middle;
+  .nightOPacity();
+}
+
+  //----------------------------------------------------------------------------------------
+  //pages
+  //----------------------------------------------------------------------------------------
+  #mainpage{
+    .chartItem{
+      cursor: pointer;
+      overflow: hidden;
+      width: 22em;
+      max-width: 100%;
+      .flex-display(inline);
+      .flex-direction(row);
+      .flex-align-items(center);
+      margin-right: 3em;
+      padding: 1em;
+      padding-right: 0;
+      line-height: 2em;
+      border-bottom: @normalBorder;
+      border-color: var(--avnav-border-color);
+      .more {
         display: inline-block;
         float: right;
+        width: 1em;
+        height: 1em;
+        background-image: url('../images/icons-new/ic_chevron_right.svg');
+        background-size: 100% 100%;
+        opacity: 0.6;
       }
-    }
-  }
-}
-
-#infopage{
-  .link{
-    display: inline-block;
-    padding: 1em;
-    text-decoration: underline;
-  }
-  .linkWrapper{
-    margin: 1em;
-    .flex-shrink(0);
-  }
-  .infoFrame{
-    padding-left: 1em;
-    padding-right: 1em;
-    p {
-      margin-top: 0.2em;
-      margin-bottom: 0.5em;
-    }
-    h3 {
-      margin-top: 1em;
-      margin-bottom: 0.2em;
-    }
-  }
-  .avnavVersion {
-    margin-left: 1em;
-  }
-
-}
-
-#gpspage{
-  .iconContainer{
-    z-index: 101;
-  }
-  .leftPart{
-    .flex-direction(row);
-    height: 100%;
-  }
-  .hfield{
-    width: 50%;
-    height: 100%;
-    border: 1px solid;
-    .nightBorderFade(grey);
-    .widgetContainer{
-      height: 100%;
-      width: 100%;
-      padding: 0;
-      margin: 0;
-      .flex-direction(column);
-      .flex-align-items(stretch);
-    }
-  }
-  .resize,.noresize{
-    .flex-display();
-    .flex-direction(column);
-    .flex-justify-content(space-evenly);
-    max-height: 100%;
-    min-width: 0;
-    min-height: 0;
-  }
-
-}
-
-#aispage{
-  .aisListItem{
-    .listEntry();
-    .flex-wrap(wrap);
-    .aisItemFB{
-      width:4em;
-      min-width: 4em;
-    }
-    .fb1{
-      font-size: 2.5em;
-      font-weight: bold;
-    }
-    .aisData{
-      overflow: hidden;
-      max-width: 100%;
-      .aisData1{
-        font-weight: bold;
-        margin-bottom: 0.2em;
+      img {
+        .nightOPacity();
+        width: 1.3em;
+        height: 1.3em;
+        border-radius: 50%;
+        margin-right: 1em;
+        vertical-align: middle;
       }
-      .aisData2{
-        white-space: pre-line;
-        font-family: monospace;
+      .chartName{
+        .flex(1);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
-      .infoLine{
-        margin-bottom: 0.2em;
-        .flex-display();
-        .flex-direction(row);
-        .flex-wrap(wrap);
+      &.noOverlays .smallButton.MainOverlays {
+        opacity: 0.4;
       }
-      .label{
-        .mdText2();
-        width: 2em;
-        display: inline-block;
-      }
-      .info{
-        padding-left: 1em;
-        min-width: 6.5em;
-        display: inline-block;
+
+
+    }
+    .footer{
+      height: 3.2em;
+      .inner{
+        font-size: 0.8em;
+        padding-top: 0.8em;
+        width: 100%;
+        .status{
+          padding-left: 1em;
+          padding-right: 1em;
+          text-align: left;
+          z-index: 10;
+          white-space: nowrap;
+          display: inline-block;
+          margin-bottom: 0.2em;
+        }
+        .link{
+          text-align: right;
+          padding-right: 1em;
+          white-space: nowrap;
+          display: inline-block;
+          float: right;
+        }
       }
     }
   }
 
-  .aisSummary{
-    .nightBackFade(@colorSecond);
-    padding-top: 0.5em;
-    padding-left: 1em;
-    padding-bottom: 0.5em;
-    min-height: 3em;
-    .flex-shrink(0);
-    span{
+  #infopage{
+    .link{
       display: inline-block;
-      vertical-align: middle;
-      margin-right: 1em;
+      padding: 1em;
+      text-decoration: underline;
     }
-    .aisWarning{
-      display: inline-block;
-      width: 1.8em;
-      height: 1.8em;
-      margin-right: 1em;
-      vertical-align: middle;
+    .linkWrapper{
+      margin: 1em;
+      .flex-shrink(0);
     }
-  }
-}
-
-#aisinfopage{
-  .status{
-    left: 3em;
-    top: ( 2em + @headlineHeight)  ;
-    position: absolute;
-    width: 100px;
-    height:100px;
-  }
-  .smallDisplay & .status{
-    display: block;
-    margin-left: 1em;
-    position: relative;
-    top: 0;
-    left: 0;
-  }
-  .infoList{
-    width: 100%;
-    max-width: 60em;
-    margin-left: auto;
-    margin-right: auto;
-    font-size: 1.2em;
-    margin-top: 0.5em;
-    .flex-grow(1);
-    .label {
-      display: inline-block;
-      text-align: right;
+    .infoFrame{
+      padding-left: 1em;
       padding-right: 1em;
-      .mdText2();
-      padding-bottom: .5em;
-      width: 50%;
+      p {
+        margin-top: 0.2em;
+        margin-bottom: 0.5em;
+      }
+      h3 {
+        margin-top: 1em;
+        margin-bottom: 0.2em;
+      }
     }
-    .smallDisplay & {
-      .label {
-        display: block;
-        text-align: left;
-        width: inherit;
-        margin-left: 1em;
+    .avnavVersion {
+      margin-left: 1em;
+    }
+
+  }
+
+  #gpspage{
+    .iconContainer{
+      z-index: 102;
+    }
+    .leftPart{
+      .flex-direction(row);
+      height: 100%;
+    }
+    .hfield{
+      width: 50%;
+      height: 100%;
+      border: @normalBorder;
+      border-color: var(--avnav-border-color);
+      .widgetContainer{
+        height: 100%;
+        width: 100%;
+        padding: 0;
+        margin: 0;
+        .flex-direction(column);
+        .flex-align-items(stretch);
+      }
+    }
+    .resize,.noresize{
+      .flex-display();
+      .flex-direction(column);
+      .flex-justify-content(space-evenly);
+      max-height: 100%;
+      min-width: 0;
+      min-height: 0;
+    }
+
+  }
+  .aisHidden{
+    opacity: 0.5;
+  }
+  #aispage{
+    .aisListItem{
+      .listEntry();
+      .aisItemFB{
+        width:4em;
+        min-width: 4em;
+      }
+      .fb1{
+        font-size: 2.5em;
+        font-weight: bold;
       }
       .aisData{
-        width: inherit;
-        margin-left: 1em;
+        overflow: hidden;
+        max-width: 100%;
+        .aisData1{
+          font-weight: bold;
+          margin-bottom: 0.2em;
+        }
+        .aisData2{
+          white-space: pre-line;
+          font-family: monospace;
+        }
+        .infoLine{
+          margin-bottom: 0.2em;
+          .flex-display();
+          .flex-direction(row);
+          .flex-wrap(wrap);
+        }
+        .label{
+          .mdText2();
+          width: 2em;
+          display: inline-block;
+        }
+        .info{
+          padding-left: 1em;
+          min-width: 6.5em;
+          display: inline-block;
+        }
       }
     }
-    .aisData {
-      display: inline-block;
-      text-align: left;
-      padding-bottom: .5em;
-      width: 50%;
-      font-weight: bold;
+
+    .aisSummary{
+      background-color: var(--avnav-select-color);
+      padding-top: 0.5em;
+      padding-left: 1em;
+      padding-bottom: 0.5em;
+      min-height: 3em;
+      .flex-shrink(0);
+      span{
+        display: inline-block;
+        vertical-align: middle;
+        margin-right: 1em;
+      }
+      .aisWarning{
+        display: inline-block;
+        width: 1.8em;
+        height: 1.8em;
+        margin-right: 1em;
+        vertical-align: middle;
+      }
     }
   }
-}
 
-.addOnFrame{
-  .flex(1);
-  .flex-display();
-  .flex-align-items(stretch);
-  iframe{
-    .flex(1);
-    height: 100%; /* older microsoft ...*/
-    min-height: 100%; //old safari
-    min-width: 100%; //old safari
-  }
-}
-#addonpage{
-  .buttonContainer{
-    overflow-y: auto;
-  }
-}
-
-#addresspage {
-
-  .url {
-    margin-bottom: 1em;
-    font-size: 1.2em;
-  }
-  .address {
-    .listEntry();
-    .flex-direction(column);
-    padding: 2em;
-  }
-}
-
-#statuspage,#importerpage,.importConverterDialog,.importScannerDialog{
-  .editIcon {
-    margin-left: 1em;
-  }
-  .status {
-    .listEntry();
-    .flex-direction(column);
-    padding-left: 1em;
-    margin-top: 5px;
-    line-height: 1.5em;
-    .statusHeading{
-      .flex-display();
-      .flex-direction(row);
-      &.disabled{
+  @aisInfoSmall: 35em;
+  @aisInfoNoIconHeight: 40em;
+  .aisInfoDialog{
+    position: relative;
+    .status{
+      width: 100px;
+      height:100px;
+      display: block;
+      @media(max-width: @aisInfoSmall) {
+        @media (max-height: @aisInfoNoIconHeight) {
+          display: none;
+        }
+      }
+    }
+    .infoList{
+      width: 100%;
+      height: 100%;
+      @media(max-width: @aisInfoSmall){
+        height: unset;
+      }
+      max-width: 60em;
+      margin-left: auto;
+      margin-right: auto;
+      margin-top: 0.5em;
+      .flex-grow(1);
+      .label {
+        display: inline-block;
+        padding-right: 1em;
         .mdText2();
+        width: 6em;
+      }
+      .aisData {
+        display: inline-block;
+        text-align: left;
+        padding-bottom: .5em;
+        width: 15em;
+        font-weight: bold;
+      }
+      .aisWarning{
+        color: var(--avnav-attention-color); //should also be ok for night mode as normal night color is dimmed to 60%
+      }
+    }
+    .dialogRow{
+      min-height: 0;
+      flex-shrink: 1;
+      overflow: auto;
+      line-height: 1.5em;
+      @media(max-width: @aisInfoSmall){
+        .flex-direction(column-reverse)
       }
     }
   }
-  .childStatus {
-    padding-left: 1.5em;
-    margin-top: 3px;
+
+  .addOnFrame{
+    .flex(1);
     .flex-display();
-    .flex-direction(row);
-    .flex-align-items(center);
-    .flex-wrap(wrap);
-    .mdText2();
-    img {
-      width: 1em;
-      height: 1em;
-      margin-left: -1em;
-    }
-    &.sub{
-      margin-left: 1.5em;
-      margin-top: 0;
+    .flex-align-items(stretch);
+    iframe{
+      .flex(1);
+      height: 100%; /* older microsoft ...*/
+      min-height: 100%; //old safari
+      min-width: 100%; //old safari
     }
   }
-  .statusName {
-    padding-left: 3px;
-  }
-  .statusInfo {
-    padding-left: 3px;
-    word-wrap: break-word;
-  }
-  &.serverError{
-    .header {
-      .nightBackFade(@colorRed);
+  #addonpage{
+    .buttonContainer{
+      overflow-y: auto;
     }
   }
-}
 
-#importerpage{
-  .itemInfo {
-    margin-left: 1.5em;
-    padding-left: 3px;
-    .mdText2();
-  }
-}
+  #addresspage {
 
-#wpapage {
-  .wpaInterface {
-    font-size: 1.2em;
-    margin-top: 0.5em;
-    margin-bottom: 0.5em;
-    padding-left: 0.5em;
-    .detail {
-      .mdText2();
-      margin-top: 0.3em;
-      font-size: 0.81em;
-    }
-  }
-  .wpaNetwork {
-    .detail {
-      font-size: 1em;
-      .mdText2();
-      line-height: 1.5em;
-      margin-right: 0.5em;
-    }
-    .ssid {
-      margin-right: 2em;
+    .url {
+      margin-bottom: 1em;
       font-size: 1.2em;
     }
-  }
-}
-
-.wpaDialog {
-  button[name=cancel] {
-    float: right;
-  }
-  button[name=connect] {
-    float: right;
-  }
-  button[name=disable] {
-    float: right;
-  }
-  button[name=remove] {
-    float: left;
-  }
-  label {
-    margin-bottom: 0.5em;
-    display: block;
-    text-align: left;
-  }
-
-}
-
-#routepage{
-  &.activeRoute .header{
-    .nightBackFade(@colorRed);
-  }
-  .routeCurrent {
-    background-color: #CFD8DC;
-    padding: 1em;
-    padding-right: 1.5em;
-    height: 5.2em;
-    position: relative;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.24);
-    .routeName{
-      white-space: nowrap;
-      overflow: hidden;
-    }
-    .routeInfo{
-      .mdText2();
-      margin-top: 0.7em;
-    }
-    .more{
-      display: inline-block;
-      position: absolute;
-      right: 0;
-      top: 1em;
-      height: 2em;
-      width: 2em;
-    }
-
-  }
-
-}
-.editRouteName{
-  label{
-    display: inline-block;
-    margin-left: 1em;
-  }
-
-}
-
-#downloadpage{
-  .itemMain {
-    .flex-display();
-    .flex-direction(row);
-    .flex(1);
-    .flex-wrap(wrap);
-    .flex-align-items(start);
-  }
-  .listEntry{
-    .flex-wrap(wrap);
-    .flex-align-items(center);
-  }
-  .downloadItemData{
-    .flex(1);
-    padding-left: 0.8em;
-    padding-right: 0.8em;
-    .flex-display();
-    .flex-direction(row);
-    .flex-align-items(center);
-    @media(max-width: 35em){
+    .address {
+      .listEntry();
       .flex-direction(column);
-      .flex-align-items(flex-start);
+      padding: 2em;
     }
-    .date{
+  }
+
+  #statuspage,#importerpage,.importConverterDialog,.importScannerDialog{
+    .editIcon {
+      margin-left: 1em;
+    }
+    .status {
+      .listEntry();
+      flex-direction: column;
+      align-items: flex-start;
+      padding-left: 1em;
+      margin-top: 5px;
+      line-height: 1.5em;
+      .statusHeading{
+        .flex-display();
+        .flex-direction(row);
+        &.disabled{
+          .mdText2();
+        }
+      }
+      .flex-shrink(0);
+    }
+    .childStatus {
+      padding-left: 1.5em;
+      margin-top: 3px;
+      .flex-display();
+      .flex-direction(row);
+      .flex-wrap(wrap);
       .mdText2();
-      width: 11.5em;
+      img {
+        width: 1em;
+        height: 1em;
+        margin-left: -1em;
+      }
+      &.sub{
+        margin-left: 1.5em;
+        margin-top: 0;
+      }
     }
-    .info{
-      .flex(1);
-      word-break: break-all;
+    .statusName {
+      padding-left: 3px;
     }
-    &.noDelete{
-      margin-left: 2.4em;
+    .statusInfo {
+      padding-left: 3px;
+      word-wrap: break-word;
+    }
+    &.serverError{
+      .header {
+        background-color: var(--avnav-attention-color);
+      }
     }
   }
-  .infoImages{
-    padding-left: 0.8em;
+
+  #importerpage{
+    .itemInfo {
+      margin-left: 1.5em;
+      padding-left: 3px;
+      .mdText2();
+    }
+    .importStatusDialog .inputLabel{
+        width: 3em;
+    }
   }
-  .listrasimage{
-   .iconImage('plug.svg');
+
+  #wpapage {
+    .wpaInterface {
+      font-size: 1.2em;
+      margin-top: 0.5em;
+      margin-bottom: 0.5em;
+      padding-left: 0.5em;
+      .detail {
+        .mdText2();
+        margin-top: 0.3em;
+        font-size: 0.81em;
+      }
+    }
+    .wpaNetwork {
+      .detail {
+        font-size: 1em;
+        .mdText2();
+        line-height: 1.5em;
+        margin-right: 0.5em;
+      }
+      .ssid {
+        margin-right: 2em;
+        font-size: 1.2em;
+      }
+    }
   }
-  .editimage{
+
+  .wpaDialog {
+    button[name=cancel] {
+      float: right;
+    }
+    button[name=connect] {
+      float: right;
+    }
+    button[name=disable] {
+      float: right;
+    }
+    button[name=remove] {
+      float: left;
+    }
+    label {
+      margin-bottom: 0.5em;
+      display: block;
+      text-align: left;
+    }
+
+  }
+
+.infoImages {
+  padding-left: 0.8em;
+
+
+  .icon.server {
+    .iconImage('plug.svg');
+  }
+
+  .icon.edit {
     .iconImage('ic_edit.svg');
   }
-  .viewimage{
+
+  .icon.view {
     .iconImage('visibility.svg');
   }
-  .appimage{
+
+  .appimage {
     .iconImage('apps.svg');
   }
-
 }
 
-.downloadProgress{
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 1em 1em 1em 1em;
-  background-color: lightgrey;
-  z-index: 10;
-  .flex-display();
-  .nightColors();
-  .progressContainer{
-    .flex(1);
-  }
-  .progressDisplay {
-    margin: 0.5em 0.5em 0.5em 0.5em;
-    height: 2em;
-    display: block;
-    border: 1px solid;
-    margin-left: 1em;
-    margin-bottom: 1em;
-    margin-right: 1em;
-  }
-  .progressInfo{
-    display: block;
-    text-align: center;
-  }
-  .progressDone{
-    height: 100%;
-    .nightBackColor(blue);
-  }
-}
 
-.fileDialog{
-  .existing input{
-    border-bottom: 1px solid;
-    .nightBorderFade(@colorRed)
+  //------ type icons ------
+  .icon.track{
+    .iconImage('track.svg');
   }
-}
-.userAppDialog{
-   .input, input{
-    width: auto;
-     .flex(1);
-    min-width: 10em;
+  .icon.route{
+    .iconImage('route.svg');
   }
-}
+  .icon.layout{
+    .iconImage('ballot.svg');
+  }
+  .icon.settings{
+    .iconImage('ic_settings.svg');
+  }
+  .icon.images{
+    .iconImage('image-icon.svg')
+  }
+  .icon.overlay{
+    .iconImage('layers-black.svg');
+  }
+  .icon.plugins{
+    .iconImage('extension.svg');
+  }
+  .icon.chart{
+    .oldIconImage('Chart60.png');
+  }
+  .icon.user.special{
+    .iconImage('ic_settings.svg');
+  }
+  .icon.user.html{
+    .iconImage('internet-web-browser.svg');
+  }
+  .icon.user.other{
+    .iconImage('draft.svg');
+  }
+  .icon.text{
+    .iconImage('ic_text_snippet.svg');
+  }
+  .icon.directory{
+    .iconImage('folder_shared.svg');
+  }
 
-#settingspage{
+  .downloadProgress{
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 1em 1em 1em 1em;
+    background-color: var(--avnav-second-color);
+    z-index: 10;
+    .flex-display();
+    .progressContainer{
+      .flex(1);
+    }
+    .progressDisplay {
+      margin: 0.5em 0.5em 0.5em 0.5em;
+      height: 2em;
+      display: block;
+      border: @normalBorder;
+      margin-left: 1em;
+      margin-bottom: 1em;
+      margin-right: 1em;
+    }
+    .progressInfo{
+      display: block;
+      text-align: center;
+    }
+    .progressDone{
+      height: 100%;
+      background-color: var(--avnav-slide-color);
+    }
+  }
+
+  .fileDialog{
+    .existing input{
+      border-bottom: @borderAttention;
+      border-color: var(--avnav-attention-color);
+    }
+  }
+  .userAppDialog{
+    .input, input{
+      width: auto;
+      .flex(1);
+      min-width: 10em;
+      line-break: anywhere;
+    }
+    .inputLabel{
+      width: 3.5em;
+    }
+  }
+
+  .editFileDialog{
+    width: 90vw;
+    height: 90vh;
+    &.collapsed{
+      .edit{
+        opacity: 0;
+      }
+      .dialogTitle{
+        opacity: 0;
+      }
+    }
+    .edit{
+      .flex(1);
+      position: relative;
+    }
+  }
+  .dialog:has(.collapsed){
+    background-color: unset;
+  }
+  .EditRouteDialog{
+    &.activeRoute{
+      border: @borderAttentionLarge;
+      padding: 5px;
+      border-color: var(--avnav-attention-color);
+    }
+  }
+  .EditRoutePoints{
+    .routeInfoPoint {
+      .flex-display();
+      .flex-direction(row);
+      line-height: 2em;
+      .info{
+        width: 8em;
+        padding-top: 0.4em;
+        padding-bottom: 0.4em;
+      }
+    }
+  }
+
+  #settingspage{
     .leftSection{
       .flex-display();
       .flex-direction(row);
@@ -1370,33 +1534,40 @@ span.valuePrefix{
       min-height: 0;
     }
     .sectionList{
-      border-right: 1px solid ;
-      margin-right: 2em;
-      .nightBorderColorGR();
-      width: 10em;
-      .flex-grow(0);
+      border-right: @normalBorder ;
+      border-color: var(--avnav-border-color);
+      flex-basis: 10em;
+      flex-grow: 0;
+      display: flex;
+      flex-direction: column;
       &.expand{
         .flex-grow(1);
+        width: 100%;
+        margin:0;
+      }
+      .layoutSetting{
+        color:var(--avnav-attention-color);
       }
     }
     .settingsList{
+      input,.input,.inputFrame{
+        border-bottom: none;
+        width: calc(100% - @dialogInputLabelWidth - 3em); //room for 2 buttons
+        max-width: 30em;
+        overflow: clip;
+        line-break: anywhere;
+      }
+      .error input,.error .input,.error .inputFrame{
+        border-bottom: @borderAttention;
+        border-bottom-color: var(--avnav-attention-color);
+      }
+      overflow: auto;
       .flex-grow(1);
-      overflow-x: hidden;
-      .label, .inputLabel{
-        width: 10em;
+      & .dialogRow{
+        line-height: unset;
       }
-      .value, .checkBox {
-        .mdText2();
-      }
-      .colorSelector .input{
-        .mdText2();
-      }
-      .colorValue{
-        width: 1.5em;
-        height: 1.5em;
-      }
-      .listEntry{
-        .flex-align-items(center)
+      .layoutSetting{
+        color: var(--avnav-attention-color);
       }
     }
     .sectionList,.settingsList{
@@ -1411,209 +1582,201 @@ span.valuePrefix{
         width: 0.8em;
       }
     }
-}
-
-.settingsDialog{
-  input{
-    width: 10em;
-  }
-  button[name=reset] {
-    float: left;
-  }
-  .settingsRange {
-    margin-bottom: 1em;
-    font-size: 0.8em;
-    .mdText2();
-  }
-  &.colorDialog {
-    .value {
-      margin-top: 1em;
-    }
-    .colorValue {
-      width: 50px;
-      height: 50px;
-      display: inline-block;
-      vertical-align: middle;
-    }
-    .colorFrame {
-      margin-top: 1em;
-    }
-    .colorPicker {
-      .flex-display();
-      .flex-direction(row);
-    }
-    .colorName{
-      width:11em;
-    }
   }
 
-}
-
-#warningpage{
-  .warningFrame {
-    margin-left: 0.5em;
-    margin-right: 0.5em;
-  }
-
-}
-
-#viewpage{
-  .mainContainer{
-    .flex(1);
-    position: relative;
-    overflow: auto;
-    &.image {
-      .flex-display();
-      .flex-align-items(center);
-      .flex-justify-content(center);
+  .settingsDialog{
+    input{
+      width: 10em;
     }
-    &.hidden{
-      display: none !important;
+    button[name=reset] {
+      float: left;
     }
-    &.flex{
-      .flex-display();
-    }
-  }
-  .readOnlyText{
-    width: 100%;
-    height: 100%;
-    overflow: auto;
-  }
-  .readOnlyImage{
-    max-width: 100%;
-    max-height: 100%;
-    margin: auto;
-    display: block;
-    object-fit: contain;
-  }
-  //some corrections for codeflask
-  pre.codeflask__pre.codeflask__flatten {
-    width: unset;
-  }
-  .codeflask__lines{
-    z-index: 4 !important;
-    background-color:  #eee;
-  }
-  .codeflask__lines__line{
-    background-color:  #eee;
-    padding-right: 5px;
-    padding-left: 0;
-  }
-  .codeflask__flatten{
-    font-size: inherit;
-  }
-  textarea{
-    font-size: inherit;
-  }
-}
-
-#addonconfigpage{
-  .appIcon{
-    width: 3em;
-    height: 3em;
-    margin-left: 0.5em;
-    margin-right: 1em;
-  }
-  .itemMain{
-    .flex(1);
-    .flex-display();
-    .flex-direction(column);
-    .itemTitle{
+    .settingsRange {
+      margin-bottom: 1em;
+      font-size: 0.8em;
       .mdText2();
     }
-    overflow: hidden;
-    min-width: 0;
-    .sourceInfo {
-      .mdText2();
+    &.colorDialog {
+      .value {
+        margin-top: 1em;
+      }
+      .colorValue {
+        width: 50px;
+        height: 50px;
+        display: inline-block;
+        vertical-align: middle;
+      }
+      .colorFrame {
+        margin-top: 1em;
+      }
+      .colorPicker {
+        .flex-display();
+        .flex-direction(row);
+      }
+      .colorName{
+        width:11em;
+      }
     }
-    .sourceInfo:before{
-      content:"(";
-    }
-    .sourceInfo:after{
-      content:")";
-    }
-  }
-  .AddonConfigView{
-    .flex-shrink(0);
-  }
-}
 
-//-------------- pages with map and widgets ----------------------------
-.mapPage{
-  .map{
-    .flex(1);
-    overflow: hidden;
-    /* position absolute contradicts somehow the flex approach
-       but otherwise the map will not show on old Safari (IPad 4, safari 9)
-     */
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 0;
-    bottom: 0;
   }
-  &.mapFloat .map{
-    z-index: 1;
-  }
-  .leftSection{
-    .flex-display();
-    .flex(1);
-    .flex-direction(column);
-    position: relative;
 
-    min-width: 0;
-    min-height: 0;
-  }
-  .bottomSection{
-    z-index: 3;
-    .flex-display();
-    .flex-direction(row);
-    .flex-wrap(nowrap);
-    position: relative;
-    .bottomLeft{
-      width: 50%;
-      position: relative;
-      .flex-direction(row-reverse);
-      .flex-justify-content(flex-start);
+  #warningpage{
+    .warningFrame {
+      margin-left: 0.5em;
+      margin-right: 0.5em;
     }
-    .bottomRight{
-      width: 50%;
+
+  }
+
+  #viewpage{
+    .mainContainer{
+      .flex(1);
       position: relative;
+      overflow: auto;
+      &.image {
+        .flex-display();
+        .flex-align-items(center);
+        .flex-justify-content(center);
+      }
+      &.hidden{
+        display: none !important;
+      }
+      &.flex{
+        .flex-display();
+      }
+    }
+    .readOnlyText{
+      width: 100%;
+      height: 100%;
+      overflow: auto;
+    }
+    .readOnlyImage{
+      max-width: 100%;
+      max-height: 100%;
+      margin: auto;
+      display: block;
+      object-fit: contain;
+    }
+    //some corrections for codeflask
+    pre.codeflask__pre.codeflask__flatten {
+      width: unset;
+    }
+    .codeflask__lines{
+      z-index: 4 !important;
+      background-color:  #eee;
+    }
+    .codeflask__lines__line{
+      background-color:  #eee;
+      padding-right: 5px;
+      padding-left: 0;
+    }
+    .codeflask__flatten{
+      font-size: inherit;
+    }
+    textarea{
+      font-size: inherit;
+    }
+  }
+
+  #addonconfigpage{
+    .primary{
+      line-break: anywhere;
+    }
+     .sourceInfo {
+        .mdText2();
+       margin-top: 0.2em;
+      }
+      .sourceInfo:before{
+        content:"(";
+      }
+      .sourceInfo:after{
+        content:")";
+      }
+  }
+
+  //-------------- pages with map and widgets ----------------------------
+  .mapPage{
+    .iconContainer{
+      z-index: 102; //above widgets and shade
+    }
+    .mapFrame {
+      position: relative;
+      .flex-grow(1);
+    }
+    .map{
+      .flex(1);
+      overflow: hidden;
+      /* position absolute contradicts somehow the flex approach
+         but otherwise the map will not show on old Safari (IPad 4, safari 9)
+       */
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      bottom: 0;
+    }
+    &.mapFloat .map{
+      z-index: 1;
+    }
+    .leftSection{
+      .flex-display();
+      .flex(1);
+      .flex-direction(column);
+      position: relative;
+
+      min-width: 0;
+      min-height: 0;
+    }
+    .bottomSection{
+      z-index: 3;
+      .flex-display();
       .flex-direction(row);
+      .flex-wrap(nowrap);
+      position: relative;
+      .bottomLeft{
+        width: 50%;
+        position: relative;
+        .flex-direction(row-reverse);
+        .flex-justify-content(flex-start);
+      }
+      .bottomRight{
+        width: 50%;
+        position: relative;
+        .flex-direction(row);
+      }
+    }
+    &.editing .bottomSection{
+      .bottomLeft {
+        border-right: 0.3em solid;
+        border-color: var(--avnav-attention-color);
+      }
+      .bottomRight {
+        border-left: 0.3em solid;
+        border-color: var(--avnav-attention-color);
+      }
+    }
+    .widgetContainer.left{
+      position: absolute;
+      bottom:0;
+      left:0;
+      max-height: 100%;
+      z-index: 3;
+      width:  var(--avnav-left-widgets-width);
+    }
+    .widgetContainer.top{
+      z-index: 3;
+    }
+    .overlayContainer{
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      background-color: inherit;
+    }
+    &.mapFloat .buttonContainer{
+      background-color: unset;
+      z-index: 2;
+    }
+    &.mapFloat .buttonShade{
+      z-index: 2;
     }
   }
-  &.editing{
-    .bottomLeft {
-      border-right: 0.3em solid;
-      .nightBorderFade(@editingColor);
-    }
-    .bottomRight {
-      border-left: 0.3em solid;
-      .nightBorderFade(@editingColor);
-    }
-  }
-  .widgetContainer.left{
-    position: absolute;
-    bottom:0;
-    left:0;
-    max-height: 100%;
-    z-index: 3;
-    width:  @navLeftWidgetWidth;
-  }
-  .widgetContainer.top{
-    z-index: 3;
-  }
-  .overlayContainer{
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    background-color: inherit;
-  }
-  &.mapFloat .buttonContainer{
-    background-color: unset;
-    z-index: 2;
-  }
-  &.mapFloat .buttonShade{
-    z-index: 2;
-  }
-}

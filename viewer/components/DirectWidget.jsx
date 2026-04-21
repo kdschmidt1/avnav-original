@@ -6,20 +6,32 @@ import React from "react";
 import PropTypes from 'prop-types';
 import Value from './Value.jsx';
 import {WidgetFrame, WidgetProps} from "./WidgetBase";
+import {useStringsChanged} from "../hoc/Resizable";
 
 const DirectWidget=(wprops)=>{
-    const props=wprops.translateFunction?{...wprops,...wprops.translateFunction({...wprops})}:wprops;
+    let props;
+    try {
+        props = wprops.translateFunction ? {...wprops, ...wprops.translateFunction({...wprops})} : wprops;
+    }catch (e){
+        props={...wprops,value:'Error: '+e}
+    }
     let val;
     let vdef=props.default||'0';
     if (props.value !== undefined) {
-        val=props.formatter?props.formatter(props.value):vdef+"";
+        if (props.minValue != null && parseFloat(props.value) < props.minValue)val=vdef;
+        else if(props.maxValue != null && parseFloat(props.value) > props.maxValue)val=vdef;
+        else val=props.formatter?props.formatter(props.value):vdef+"";
     }
     else{
         if (! isNaN(vdef) && props.formatter) val=props.formatter(vdef);
         else val=vdef+"";
     }
+    const display={
+        value:val
+    };
+    const resizeSequence=useStringsChanged(display,wprops.mode==='gps')
     return (
-        <WidgetFrame {...props} addClass="DirectWidget" >
+        <WidgetFrame {...props} addClass="DirectWidget" resizeSequence={resizeSequence} >
             <div className='widgetData'>
                 <Value value={val}/>
             </div>
@@ -30,6 +42,8 @@ const DirectWidget=(wprops)=>{
 DirectWidget.propTypes = {
     name: PropTypes.string,
     unit: PropTypes.string,
+    minValue: PropTypes.number,
+    maxValue: PropTypes.number,
     ...WidgetProps,
     value: PropTypes.any,
     isAverage: PropTypes.bool,

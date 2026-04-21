@@ -8,6 +8,7 @@ import Formatter from '../util/formatter';
 import keys from '../util/keys.jsx';
 import navcompute from '../nav/navcompute.js';
 import {WidgetFrame, WidgetProps} from "./WidgetBase";
+import globalstore from "../util/globalstore";
 
 const normalColors={
     all: '#000000'
@@ -22,8 +23,8 @@ const XteWidget = (props) => {
     const drawXte = () => {
         if (!canvas) return;
         let context = canvas.getContext('2d');
-        let xteMax = props.xteMax;
-        let xteText = Formatter.formatDecimal(xteMax, 1, 1);
+        let xteMax = parseFloat(props.xteMax);
+        let xteText = Formatter.formatDecimal(xteMax, 1, (xteMax <10)?1:0);
         let color = canvas.style.color;
         if (!color) {
             color = props.nightMode ? nightColors.all : normalColors.all;
@@ -51,7 +52,7 @@ const XteWidget = (props) => {
         let shipUpper = h * 0.45;
         let shipH = h * 0.3;
         let shipw = w * 0.03;
-        context.font = "normal " + Math.ceil(textSize) + "px Arial";
+        context.font = "normal " + Math.ceil(textSize) + "px "+globalstore.getData(keys.properties.fontBase);
         context.textAlign = "center";
         context.fillText(xteText, left, textBase);
         context.fillText(xteText, right, textBase);
@@ -68,8 +69,8 @@ const XteWidget = (props) => {
         context.lineTo(0.5 * w, linebase + 0.5 * middleHeight);
         context.stroke();
         context.closePath();
-        let curXte = props.markerXte / navcompute.NM;
-        if (curXte === undefined) return;
+        if (props.markerXte === undefined) return;
+        let curXte = props.formatter(props.markerXte);
         let xtepos = parseFloat(curXte) / xteMax;
         if (xtepos < -1.1) xtepos = -1.1;
         if (xtepos > 1.1) xtepos = 1.1;
@@ -84,7 +85,7 @@ const XteWidget = (props) => {
     }
     setTimeout(drawXte, 0);
     return (
-        <WidgetFrame {...props} addClass="xteWidget" caption="XTE" unit="nm">
+        <WidgetFrame {...props} addClass="xteWidget" caption="XTE" unit={props.unit}>
             <canvas className='widgetData' ref={canvasRef}></canvas>
         </WidgetFrame>
 
@@ -99,9 +100,15 @@ XteWidget.propTypes={
     xteMax:     PropTypes.number
 };
 
-XteWidget.storeKeys={
-    markerXte:  keys.nav.wp.xte,
-    xteMax:     keys.properties.gpsXteMax
+XteWidget.predefined={
+    storeKeys:{
+        markerXte:  keys.nav.wp.xte,
+    },
+    editableParameters:{
+        xteMax:{type:'FLOAT',displayName:"XTE max",default:1,list:[0.1,10], description:'The end points of the XTE graph (1.0).\nAlways provide this in the unit you choose for the formatter'},
+        formatterParameters:true
+    },
+    formatter: 'formatDistance'
 };
 
 export default XteWidget;

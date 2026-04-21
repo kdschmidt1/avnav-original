@@ -10,7 +10,7 @@
     <h2> Releases </h2>
     <p>A description of the releases and download links can be found in the <a
         href="release.html">releases document</a>.</p>
-    <p>If you are in a hurry - those are the <a href="https://www.free-x.de/raspbian/bullseye">current
+    <p>If you are in a hurry - those are the <a href="https://github.com/free-x/AvNav-Image">current
         image</a>, the <a href="../downloads/daily">daily builds</a> and the <a
         href="../downloads/release">release downloads</a>.</p>
     <p>To provide a "ready to go" solution there are some images for the
@@ -25,25 +25,27 @@
       the Pi is only used as a server, the display logic will run in the browser
       e.g. on some mobile device. In this case a Raspberry Pi 3B(+) with 1GB
       should be sufficient. If you would like to run a local display you should
-      go for a Pi4 with at least 2GB of memory. </p>
+      go for a Pi4 or Pi5 with at least 2GB of memory. </p>
     <p>If you are looking for a complete desktop system with a lot of other
       applications <a href="#openplotter">OpenPlotter</a> could be your choice.
-      For running OpenPlotter I suggest a Pi4 with 4GB of RAM. 2GB will do but
-      without a lot of room for later extension requirements.</p>
+      For running OpenPlotter I suggest a Pi4 or Pi5 with 4GB of RAM. 2GB will
+      do but without a lot of room for later extension requirements.</p>
     <p>In the past there were special AvNav Touch images. But they are not
       maintained any more.<br>
     </p>
     <h2><a name="Headless"></a><a name="headless"></a>AvNav Images (named
       Headless in the past)</h2>
-    <p>Those images are maintained by <a href="https://www.segeln-forum.de/user/27970-blacksea/">BlackSea</a>
-      (many thanks...). A description is available on<a href="https://github.com/free-x/avnav/wiki">
-        his page</a>.<br>
-      The images can be downloaded from&nbsp; <a href="https://www.free-x.de/raspbian/bullseye">free-x</a>
-      and installed on a SD card as described at <a href="http://www.raspberrypi.org/downloads">http://www.raspberrypi.org/downloads</a>
-      (raw images). <br>
+    <p>Those images are maintained by <a href="https://www.segeln-forum.de/cms/user/27970-blacksea/">BlackSea</a>
+      (many thanks...). There is a description on the <a href="https://github.com/free-x/AvNav-Image">repository</a>.
+      On Windows/Linux/OSx download the image <a href="https://github.com/free-x/AvNav-Image">from
+        free-x and </a>write it using the <a href="https://www.raspberrypi.com/documentation/computers/getting-started.html#raspberry-pi-imager">raspi-imager</a>&nbsp;
+      to an SD card.<br>
+      In the imager at "CHOOSE OS" select "Use Custom" and open the downloaded
+      img file. No customisations.<br>
       The images come with </p>
     <ul>
       <li>avnav</li>
+      <li>avnav-raspi</li>
       <li><a href="https://github.com/wellenvogel/avnav-update-plugin">avnav-update-plugin</a></li>
       <li><a href="hints/ocharts.html">avnav-ocharts-plugin</a></li>
       <li><a href="https://github.com/wellenvogel/avnav-mapproxy-plugin">avnav-mapproxy-plugin</a></li>
@@ -73,12 +75,20 @@
     </p>
     <a href="../configGen/index.html"><img src="en_ConfigImagesUi.png" alt="" class="image"></a>
     <p>The meaning of the fields:</p>
-    <table border="1" width="100%">
+    <table width="100%" border="1">
       <tbody>
         <tr>
           <td>name</td>
           <td>default</td>
           <td>description</td>
+        </tr>
+        <tr>
+          <td><a name="configSEQUENCE"></a>ConfigSequence</td>
+          <td>1</td>
+          <td>If you would like to ensure that all the settings in avnav.conf
+            will be re-applied on next startup you can increase this value.
+            Otherwise AvNav will remember all the settings it has already
+            applied and will not repeat this.</td>
         </tr>
         <tr>
           <td style="width: 187px;">Wifi SSID</td>
@@ -147,7 +157,8 @@
             .<br>
             If you would upgrade the kernel of your system (from the command
             line) the kernel module will be compiled to fit the newly installed
-            kernel.</td>
+            kernel.<br>
+            Not available for bookworm images as the driver is not available.</td>
         </tr>
         <tr>
           <td><a name="configMODULES"></a>Module RTL8192EU</td>
@@ -158,7 +169,8 @@
             .<br>
             If you would upgrade the kernel of your system (from the command
             line) the kernel module will be compiled to fit the newly installed
-            kernel.</td>
+            kernel.<br>
+            Not available for bookworm images as the driver is not available.</td>
         </tr>
         <tr>
           <td>TimeZone</td>
@@ -377,8 +389,8 @@
     <h4>Connection via a different Wifi Network</h4>
     <p>You need an additional wifi adapter (USB adapter). Please check the
       compatibility before buying one - e.g. <a href="https://elinux.org/RPi_USB_Wi-Fi_Adapters">here</a>.</p>
-    <p>The stick must be plugged at the correct port (see picture). On the Pi4
-      use the blue USB Port at the board side). <br>
+    <p>The stick must be plugged at the correct port (see picture). On the
+      Pi4/Pi5 use the blue USB Port at the board side). <br>
       The internal name of the network will be wlan-av1.&nbsp; </p>
     <p></p>
     <p> <img class="fimage" src="raspi3-wlan.jpg"></p>
@@ -435,7 +447,7 @@
       the support for a local monitor there.</p>
     <p>If you enable this the system will start up a service "avnav-startx".
       This service creates a local X server, a user session for the user pi with
-      <a href="http://openbox.org/wiki/Main_Page">openbox</a> as window manager
+      <a href="https://openbox.org/help/Contents">openbox</a> as window manager
       and firefox in kiosk mode.</p>
     <p><a href="http://manpages.ubuntu.com/manpages/bionic/man1/onboard.1.html">Onboard</a>
       will be used for an on screen keyboard.</p>
@@ -472,7 +484,6 @@
     <p>Thanks to Oleg there are ready to go package repositories you can use in
       your debian based system. This will work on the pi as well as on any other
       debian (like ubuntu).</p>
-    Information is available at his github <a href="https://github.com/free-x/avnav/wiki">wiki</a>.
     <p>To set up the repository on your system, run the following commands (only
       required if you don't use the headless or the AvNav touch images):</p>
     <p></p>
@@ -484,9 +495,18 @@ sudo cp boating-buster.list /etc/apt/sources.list.d/</div>
     <p> Debian Bullseye (amd64,armhf,arm64)</p>
     <div class="code">wget -O - https://www.free-x.de/debian/oss.boating.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/oss.boating.gpg
 echo "deb [signed-by=/usr/share/keyrings/oss.boating.gpg] https://www.free-x.de/debian bullseye main contrib non-free" | sudo tee -a /etc/apt/sources.list.d/boating.list</div>
-    <p> Ubuntu Jammy (amd64)</p>
+    <p> Debian Bookworm (amd64,armhf,arm64) </p>
+    <div class="code">wget -O - https://www.free-x.de/debian/oss.boating.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/oss.boating.gpg
+echo "deb [signed-by=/usr/share/keyrings/oss.boating.gpg] https://www.free-x.de/debian bookworm main contrib non-free" | sudo tee -a /etc/apt/sources.list.d/boating.list</div>
+    <p> Debian Trixie (amd64,armhf,arm64)</p>
+    <div class="code">wget -O - https://www.free-x.de/debian/oss.boating.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/oss.boating.gpg
+echo -e "Types: deb\nURIs: https://www.free-x.de/debian\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/oss.boating.gpg" | sudo tee -a /etc/apt/sources.list.d/boating.sources</div>
+    <p>Ubuntu Jammy (amd64)</p>
     <div class="code">wget -O - https://www.free-x.de/ubuntu/oss.boating.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/oss.boating.gpg
 echo "deb [signed-by=/usr/share/keyrings/oss.boating.gpg] https://www.free-x.de/ubuntu jammy main" | sudo tee -a /etc/apt/sources.list.d/boating.list</div>
+   <p> Ubuntu Noble (amd64,arm64)</p>
+    <div class="code">wget -O - https://www.free-x.de/ubuntu/oss.boating.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/oss.boating.gpg
+echo "deb [signed-by=/usr/share/keyrings/oss.boating.gpg] https://www.free-x.de/ubuntu noble main" | sudo tee -a /etc/apt/sources.list.d/boating.list</div>
     For the installation on a linux system you need to execute:
     <div class="code">sudo apt update
 sudo apt install avnav </div>
@@ -599,7 +619,7 @@ sudo apt install openplotter-avnav</div>
     <p><img src="windows-notification-1.png" alt=""></p>
     <p><img src="windows-notification-2.png" alt=""></p>
     <p>The service Menu has the following entries:</p>
-    <table border="1" width="100%">
+    <table width="100%" border="1">
       <tbody>
         <tr>
           <td>Caption</td>

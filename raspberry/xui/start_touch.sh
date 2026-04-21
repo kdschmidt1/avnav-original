@@ -1,6 +1,8 @@
 #! /bin/sh
-CFG=/boot/avnav.conf
-[ -f $CFG ] && . $CFG
+
+CFG="$(cat /proc/mounts | grep boot | cut -d\  -f2)"
+[ "$CFG" != "" ] && CFG="$CFG/avnav.conf"
+[ "$CFG" != "" -a -f "$CFG" ] && . $CFG
 HOME=/home/pi
 X=/usr/lib/xorg/Xorg
 if [ "$1" = "prepare" ] ; then
@@ -22,9 +24,10 @@ if [ "$1" = "prepare" ] ; then
   #TODO: postinstall?
   usermod -a -G tty pi
   cache=$HOME/.cache
-  if [ -d $cache ] ; then
-    chown -R pi $cache
+  if [ ! -d $cache ] ; then
+    mkdir -p "$cache"
   fi
+  chown -R pi:pi $cache
   cp -p `dirname $0`/.xinitrc $HOME
   chown pi:pi $HOME/.xinitrc
   update-menus

@@ -1,27 +1,9 @@
 /**
  * Created by Andreas on 14.05.2014.
  */
-import base from '../base.js';
+import base from '../base.ts';
 import assign from 'object-assign';
 let navobjects={};
-
-
-
-/**
- * the center mode for ais
- * @type {{NONE: number, GPS: number, MAP: number}}
- */
-navobjects.AisCenterMode={
-    NONE:0,
-    GPS:1,
-    MAP:2
-};
-
-
-
-
-
-
 
 /**
  * a point lon,lat
@@ -30,8 +12,8 @@ navobjects.AisCenterMode={
  * @constructor
  */
 navobjects.Point=function(lon,lat){
-    this.lon=lon||0;
-    this.lat=lat||0;
+    this.lon=lon;
+    this.lat=lat;
 };
 /**
  * convert ol3 coordinates to a point
@@ -78,6 +60,9 @@ navobjects.Point.prototype.toCoord=function(){
 navobjects.Point.prototype.clone=function(){
     return new navobjects.Point(this.lon,this.lat);
 };
+navobjects.Point.prototype.valid=function(){
+    return !isNaN(parseFloat(this.lat)) && ! isNaN(parseFloat(this.lon))
+}
 /**
  * a waypoint (to interact with the server)
  * @param {number} lon
@@ -186,59 +171,13 @@ navobjects.Distance=function(){
      * the distance in meters
      * @type {number}
      */
-    this.dts=0;
+    this.dts=undefined;
     /**
      * the course
      * @type {number}
      */
-    this.course=0
+    this.course=undefined;
 };
 
-
-
-
-/**
- * a CPA point for AIS data, contains the point + the time and the info whether we pass front or back
- * @constructor
- *
- */
-navobjects.Cpa=function(){
-
-    /**
-     * the source position at CPA
-     * @type {navobjects.Point}
-     */
-    this.src=new navobjects.Point(0,0);
-    /**
-     * the destination position at CPA
-     * @type {navobjects.Point}
-     */
-    this.dst=new navobjects.Point(0,0);
-    /**
-     *
-     * @type {undefined|navobjects.Point}
-     */
-    this.crosspoint=undefined;
-    /**
-     * distance in m
-     * @type {number}
-     */
-    this.cpa=0;
-
-    /**
-     * time till cpa in s
-     * @type {number}
-     */
-    this.tcpa=-1;
-    /**
-     *
-     * @type {number|undefined}: 0-back,1-front,-1 parallel,undefined-parallel crossed
-     */
-    this.front=undefined;
-};
-
-navobjects.Ais=function(){
-
-};
 
 export default navobjects;

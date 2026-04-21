@@ -1,23 +1,112 @@
+/*
+# Copyright (c) 2022,2025 Andreas Vogel andreas@wellenvogel.net
+
+#  Permission is hereby granted, free of charge, to any person obtaining a
+#  copy of this software and associated documentation files (the "Software"),
+#  to deal in the Software without restriction, including without limitation
+#  the rights to use, copy, modify, merge, publish, distribute, sublicense,
+#  and/or sell copies of the Software, and to permit persons to whom the
+#  Software is furnished to do so, subject to the following conditions:
+#
+#  The above copyright notice and this permission notice shall be included
+#  in all copies or substantial portions of the Software.
+#
+#  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+#  OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+#  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+#  THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+#  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+#  FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+#  DEALINGS IN THE SOFTWARE.
+*/
+
 import globalStore from '../util/globalstore.jsx';
 import keys from '../util/keys.jsx';
 import assign from 'object-assign';
-import 'whatwg-fetch-timeout';
+import globalstore from "./globalstore";
+import base from "../base";
 
+class ResponseError extends Error {
+    constructor(response) {
+        super();
+        this.code=response.status;
+        this.txt=response.statusText;
+    }
+    toString() {
+        return this.txt;
+    }
+}
+/**
+ *
+ * @param url either a string or a dict with request parameters
+ *            if it is a dict it's treated as an api request using the api url
+ *            if it is a string it depends on the flag useNavUrl in options - if not set or true the navurl will be prepended
+ * @param options
+ * @returns {string}
+ */
+export const prepareUrl=(url, options)=>{
+    if (url === undefined) {
+        return undefined;
+    }
+    let rurl="";
+    if (url instanceof URL){
+        url=url.toString();
+    }
+    if (typeof(url) === 'string') {
+        rurl=url;
+        if ( options && options.useNavUrl !== false ) {
+            rurl = globalStore.getData(keys.gui.global.navUrl) + rurl;
+        }
+        return rurl;
+    }
+    //new syntax for parameter object instead of url
+    if (typeof(url) === 'object'){
+        rurl=globalStore.getData(keys.gui.global.navUrl);
+        const {request,type,command,...other} = url;
+        if (request && request !== 'api'){
+            throw new Error("invalid request "+request);
+        }
+        if ((type !== undefined) && (command !== undefined)){
+            rurl=addParameters(rurl+'/'+type+'/'+command,other);
+        }
+        else {
+            rurl = addParameters(rurl, url);
+        }
+        //always add a _ parameter with the current date to API requests
+        //to avoid any caching
+        rurl=addParameters(rurl,{'_':(new Date()).getTime()});
+    }
+    return rurl;
 
-const prepare=(url,options,defaults)=>{
+};
+
+export const buildProxyUrl=(url, baseUrl,headers,parameters)=>{
+    if (! (url instanceof URL)){
+        url=new URL(url,baseUrl||window.location.href);
+    }
+    if (url.origin === window.location.origin){
+        return url.toString();
+    }
+    let proxyUrl=new URL("/proxy/"+encodeURIComponent(url.toString()),window.location.href);
+    if (headers){
+        for (let k in headers){
+            proxyUrl.searchParams.append("h:"+k, headers[k]);
+        }
+    }
+    if (parameters){
+        for (let k in parameters){
+            proxyUrl.searchParams.append(k, parameters[k]);
+        }
+    }
+    return proxyUrl.toString();
+}
+
+const prepareInternal=(url, options, defaults)=>{
     if (url === undefined) {
         return [undefined,undefined];
     }
-    let rurl="";
-    if (typeof(url) === 'string') rurl=url;
     let ioptions=assign({},defaults,options);
-    if ( ioptions.useNavUrl !== false){
-        rurl=globalStore.getData(keys.properties.navUrl)+rurl;
-    }
-    //new syntax for parametr object instead of url
-    if (typeof(url) === 'object'){
-        rurl=addParameters(rurl,url);
-    }
+    let rurl=prepareUrl(url, ioptions);
     if (ioptions.timeout === undefined) ioptions.timeout=parseInt(globalStore.getData(keys.properties.networkTimeout));
     let headers=undefined;
     if ( !(ioptions && ioptions.noCache !== undefined && !ioptions.noCache)){
@@ -29,7 +118,26 @@ const prepare=(url,options,defaults)=>{
     if (headers) requestOptions.headers=headers;
     requestOptions.timeout=ioptions.timeout;
     return [rurl,requestOptions];
-};
+}
+
+
+export const fetchWithTimeout=(url,options)=>{
+    const timeout=(options||{}).timeout;
+    if (timeout === undefined){
+        return fetch(url,options);
+    }
+    const foptions={...options};
+    if (typeof(AbortSignal.timeout) === 'function'){
+        foptions.signal=AbortSignal.timeout(timeout);
+    }
+    else{
+        const controller = new AbortController();
+        foptions.signal=controller.signal;
+        self.setTimeout(()=>controller.abort(),timeout);
+    }
+    return fetch(url,foptions);
+}
+
 
 const handleJson=(rurl,requestOptions,options)=>{
     return new Promise((resolve,reject)=>{
@@ -39,17 +147,17 @@ const handleJson=(rurl,requestOptions,options)=>{
         }
         let sequence=undefined;
         if (options && options.sequenceFunction) sequence=options.sequenceFunction();
-        fetch(rurl,requestOptions).then(
+        fetchWithTimeout(rurl,requestOptions).then(
             (response)=>{
                 if (response.status < 200 || response.status >= 300){
-                    reject(response.statusText);
+                    reject(new ResponseError(response));
                     return;
                 }
                 if (response.ok){
                     return response.json();
                 }
                 else{
-                    reject(response.statusText);
+                    reject(new ResponseError(response));
                 }
             },
             (error)=>{
@@ -92,7 +200,10 @@ const addParameters=(url,parameters)=>{
 };
 const handleAndroidPost=(url,body)=>{
     return new Promise((resolve,reject)=> {
-        let res=JSON.parse(avnav.android.handleUpload(url, body));
+        //we need to build the full url here
+        //as the navUrl could just be relative
+        const fullUrl=new URL(url,window.location.href);
+        let res=JSON.parse(window.avnavAndroid.handleUpload(fullUrl.toString(), body));
         if (res.status === 'OK'){
             resolve(res);
             return;
@@ -107,7 +218,6 @@ let RequestHandler={
     /**
      * do a json get request
      * @param url - either string or object with request parameters
-     * @param options:
      *        useNavUrl - (default: true) - prepend the navUrl to the provided url
      *        checkOk   - (default: true) - check if the response has a status field and this is set to "OK"
      *        noCache   - (default: true) - prevent caching
@@ -115,20 +225,21 @@ let RequestHandler={
      *        sequenceFunction - if set: a function to return a sequence - if the one returned from start
      *                           does not match the on at the result we reject
      *        opt_parameter - object with request parameters
+     * @param options
      * @param opt_parameter
      */
     getJson:(url,options,opt_parameter)=>{
-        let [rurl,requestOptions]=prepare(url,options);
+        let [rurl,requestOptions]=prepareInternal(url,options);
         return handleJson(addParameters(rurl,opt_parameter),requestOptions,options);
     },
     postJson:(url,body,options,opt_parameters)=>{
-        let [rurl,requestOptions]=prepare(url,options);
+        let [rurl,requestOptions]=prepareInternal(url,options);
         requestOptions.method='POST';
         rurl=addParameters(rurl,opt_parameters);
         if (!requestOptions.headers) requestOptions.headers={};
         requestOptions.headers['content-type']='application/json';
         let encodedBody=JSON.stringify(body);
-        if (avnav.android){
+        if (window.avnavAndroid){
             return handleAndroidPost(rurl,encodedBody)
         }
         requestOptions.body=encodedBody;
@@ -136,12 +247,12 @@ let RequestHandler={
     },
 
     postPlain:(url,body,options,opt_parameters)=>{
-        let [rurl,requestOptions]=prepare(url,options);
+        let [rurl,requestOptions]=prepareInternal(url,options);
         rurl=addParameters(rurl,opt_parameters);
         requestOptions.method='POST';
         if (!requestOptions.headers) requestOptions.headers={};
         requestOptions.headers['content-type']='application/octet-string';
-        if (avnav.android){
+        if (window.avnavAndroid){
             return handleAndroidPost(rurl,body);
         }
         requestOptions.body=body;
@@ -156,7 +267,7 @@ let RequestHandler={
      * @param opt_parameter request parameters
      */
     getHtmlOrText:(url,options,opt_parameter)=>{
-        let [rurl,requestOptions]=prepare(url,options,{useNavUrl:false,noCache:false});
+        let [rurl,requestOptions]=prepareInternal(url,{...options,useNavUrl:false,noCache:false});
         return new Promise((resolve,reject)=>{
           rurl=addParameters(rurl,opt_parameter)
           if (!rurl) {
@@ -166,17 +277,17 @@ let RequestHandler={
           let sequence=undefined;
           if (options && options.sequenceFunction) sequence=options.sequenceFunction();
           let finalResponse;
-          fetch(rurl,requestOptions).then(
+          fetchWithTimeout(rurl,requestOptions).then(
               (response)=>{
                   if (response.status < 200 || response.status >= 300){
-                      reject(response.statusText);
+                      reject(new ResponseError(response));
                   }
                   if (response.ok){
                       finalResponse=response;
                       return response.text();
                   }
                   else{
-                      reject(response.statusText);
+                      reject(new ResponseError(response));
                   }
               },
               (error)=>{
@@ -188,7 +299,12 @@ let RequestHandler={
                           return;
                       }
                   }
-                 resolve(text,finalResponse);
+                  if (options && options.resolveObject){
+                      resolve({data:text,response:finalResponse});
+                  }
+                  else {
+                      resolve(text);
+                  }
               },(error)=>{
                   reject(error);
               });
@@ -242,6 +358,23 @@ let RequestHandler={
         } catch (e) {
             if (param.errorhandler) param.errorhandler(param,e);
         }
+    },
+    getLastModified:(url)=>{
+        if (! globalstore.getData(keys.gui.capabilities.fetchHead,false)){
+            return Promise.resolve(0);
+        }
+        const options={
+            timeout: parseInt(globalStore.getData(keys.properties.networkTimeout)),
+            method:'HEAD'
+        }
+        return fetchWithTimeout(url,options)
+            .then((response)=>{
+                    return response.headers.get('last-modified')
+                }
+                ,(err)=>{
+                base.log("error getLastModified "+url+": "+err);
+                return 0;
+                })
     }
 };
 Object.freeze(RequestHandler);

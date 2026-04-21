@@ -2,41 +2,27 @@
  * Created by andreas on 02.05.14.
  */
 
-import globalStore from '../util/globalstore.jsx';
-import keys from '../util/keys.jsx';
 import helper from '../util/helper.js';
+import Helper from '../util/helper.js';
 import React from 'react';
 import Page from '../components/Page.jsx';
-import Requests from '../util/requests.js';
+import Requests, {prepareUrl} from '../util/requests.js';
 import Mob from '../components/Mob.js';
-import Toast,{hideToast} from '../components/Toast.jsx';
-import OverlayDialog from '../components/OverlayDialog.jsx';
-import keyhandler from '../util/keyhandler.js';
+import Toast, {hideToast} from '../components/Toast.jsx';
+import {showPromiseDialog} from '../components/OverlayDialog.jsx';
 import CodeFlask from 'codeflask';
 import Prism from 'prismjs';
 import GuiHelpers from '../util/GuiHelpers.js';
-import InputMonitor from '../hoc/InputMonitor.jsx';
-import Helper from "../util/helper.js";
-import {ItemActions} from "../components/FileDialog";
+import {createItemActions} from "../components/FileDialog";
+import {ConfirmDialog} from "../components/BasicDialogs";
+import {languageMap, uploadFromEdit} from "../components/EditDialog";
 
-//add all extensions here that we can edit
-//if set to undefined we will edit them but without highlighting
-const languageMap={
-    js:'js',
-    json:'json',
-    html:'markup',
-    css:'css',
-    xml: 'markup',
-    gpx: 'markup',
-    txt: undefined
-};
-const MAXEDITSIZE=50000;
+const MAXEDITSIZE=1000000;
 
 
-class ViewPageBase extends React.Component{
+class ViewPage extends React.Component{
     constructor(props){
         super(props);
-        let self=this;
         let state={
             data:'',
             changed:false,
@@ -55,10 +41,12 @@ class ViewPageBase extends React.Component{
         if (this.html){
             state.data=this.html;
         }
+        if (this.props.options.data){
+            state.data=this.props.options.data;
+        }
         this.state=state;
         this.changed=this.changed.bind(this);
         this.flask=undefined;
-        keyhandler.disable();
     }
 
     buttons() {
@@ -118,19 +106,14 @@ class ViewPageBase extends React.Component{
                         }catch(e){
                         }
                     }
-                    let actions=ItemActions.create({type:self.type,name:self.name});
+                    let actions=createItemActions({type:self.type,name:self.name});
                     let uploadFunction;
                     if (actions.localUploadFunction){
                         uploadFunction=actions.localUploadFunction;
                     }
                     else{
                         uploadFunction=(name,data,overwrite)=>{
-                            return Requests.postPlain({
-                                request:'upload',
-                                type:self.type,
-                                overwrite: overwrite,
-                                name: name
-                            },data)
+                            return uploadFromEdit(name,data,overwrite,this.type);
                         }
                     }
                     uploadFunction(self.name,data,true)
@@ -143,7 +126,7 @@ class ViewPageBase extends React.Component{
                 name: 'Cancel',
                 onClick: ()=> {
                     if (this.state.changed){
-                        OverlayDialog.confirm("Discard Changes?")
+                        showPromiseDialog(undefined,(dprops)=><ConfirmDialog {...dprops} text={"Discard Changes?"}/>)
                             .then((data)=>{this.props.history.pop();})
                             .catch((e)=>{});
                         return;
@@ -160,8 +143,9 @@ class ViewPageBase extends React.Component{
     getExt(){
         if (this.url) return Helper.getExt(this.url);
         if (this.html) return 'html';
-        let actions=ItemActions.create({type:this.type,name:this.name});
-        return actions.extForView;
+        const item={type:this.type,name:this.name,url:this.url};
+        let actions=createItemActions(item);
+        return actions.getExtensionForView(item);
     }
     isImage(){
         let ext=this.getExt().toLowerCase();
@@ -176,20 +160,27 @@ class ViewPageBase extends React.Component{
         if (! language) language="text";
         return language;
     }
-    getUrl(includeNavUrl){
+    getUrl(){
         if (this.url) return this.url;
-        return (includeNavUrl?globalStore.getData(keys.properties.navUrl):"")+"?request=download&type="+this.type+"&name="+encodeURIComponent(this.name);
+        return prepareUrl({
+            command:'download',
+            type:this.type,
+            name:this.name
+        });
     }
     componentDidMount(){
         let self=this;
         if (this.isImage()) return;
-        if (this.html) {
+        if (this.html ) {
+            return;
+        }
+        if (this.props.options.data){
             return;
         }
         if (this.url && this.props.options.useIframe){
             return;
         }
-        Requests.getHtmlOrText(this.getUrl(true),{noCache:true}).then((text)=>{
+        Requests.getHtmlOrText(this.getUrl(),{noCache:true}).then((text)=>{
             if (! this.state.readOnly || this.canChangeMode()) {
                 let language = self.getLanguage();
                 this.flask = new CodeFlask(self.refs.editor, {
@@ -208,7 +199,6 @@ class ViewPageBase extends React.Component{
 
     }
     componentWillUnmount(){
-        keyhandler.enable();
     }
     render(){
         let self=this;
@@ -230,11 +220,11 @@ class ViewPageBase extends React.Component{
             {showView &&
                 <div className={viewClass}>
                     {(mode == 1)&&  <div dangerouslySetInnerHTML={{__html: viewData}}/>}
-                    {(mode == 0) && <img className="readOnlyImage" src={this.getUrl(true)}/>}
+                    {(mode == 0) && <img className="readOnlyImage" src={this.getUrl()}/>}
                     {(mode == 2) && <textarea className="readOnlyText" defaultValue={viewData} readOnly={true}/>}
                     {(mode == 4) &&
                     <div className="addOnFrame">
-                        <iframe className="viewPageIframe addOn" src={this.getUrl(true)}/>
+                        <iframe className="viewPageIframe addOn" src={this.getUrl()}/>
                     </div>
                     }
                 </div>}
@@ -257,7 +247,6 @@ class ViewPageBase extends React.Component{
     }
 }
 
-var ViewPage=InputMonitor(ViewPageBase);
 ViewPage.VIEWABLES=Object.keys(languageMap).concat(GuiHelpers.IMAGES);
 ViewPage.EDITABLES=Object.keys(languageMap);
 ViewPage.MAXEDITSIZE=MAXEDITSIZE;

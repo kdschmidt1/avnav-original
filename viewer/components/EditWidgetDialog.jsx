@@ -24,181 +24,198 @@
  * edit widget parameters
  */
 
-import React from 'react';
+import React, {useState} from 'react';
 import PropTypes from 'prop-types';
 import LayoutHandler from '../util/layouthandler.js';
-import OverlayDialog,{dialogHelper} from './OverlayDialog.jsx';
-import WidgetFactory, {filterByEditables} from '../components/WidgetFactory.jsx';
-import {Input,InputSelect} from './Inputs.jsx';
+import {DialogButtons, DialogFrame, DialogRow, showDialog} from './OverlayDialog.jsx';
+import WidgetFactory from '../components/WidgetFactory.jsx';
+import {Input, InputSelect} from './Inputs.jsx';
 import DB from './DialogButton.jsx';
-import {getList,ParamValueInput} from "./ParamValueInput";
 import cloneDeep from 'clone-deep';
 import Compare from "../util/compare";
+import {EditableParameterListUI} from "./EditableParameterUI";
+import assign from "object-assign";
 
 
-class EditWidgetDialog extends React.Component{
-    constructor(props){
-        super(props);
-        this.state= {
-            panel: props.panel,
-            widget:cloneDeep(props.current),
-            parameters:WidgetFactory.getEditableWidgetParameters(props.current.name)};
-        this.insert=this.insert.bind(this);
-        this.showDialog=this.showDialog.bind(this);
-        this.updateWidgetState=this.updateWidgetState.bind(this);
-        this.dialogHelper=dialogHelper(this);
+export const getList = (list, current) => {
+    if (list instanceof Promise) {
+        return new Promise((resolve, reject) => {
+            list
+                .then((data) => resolve(getList(data, current)))
+                .catch((e) => reject(e))
+        })
     }
-    insert(before){
-        if (! this.props.insertCallback) return;
-        this.props.closeCallback();
-        this.props.insertCallback(this.state.widget,before,this.state.panel);
+    let idx = 0;
+    let displayList = [];
+    list.forEach((el) => {
+        let item = undefined;
+        if (typeof (el) === 'object') {
+            item = assign({}, el);
+        } else {
+            item = {name: el}
+        }
+        item.key = idx;
+        if (!item.label) item.label = item.name;
+        idx++;
+        displayList.push(item);
+    });
+    displayList.sort((a, b) => {
+        if (!a || !a.name) return -1;
+        if (!b || !b.name) return 1;
+        let na = (typeof (a.name) === 'string') ? a.name.toUpperCase() : a;
+        let nb = (typeof (b.name) === 'string') ? b.name.toUpperCase() : b;
+        if (na < nb) return -1;
+        if (na > nb) return 1;
+        return 0;
+    });
+    return displayList;
+}
+const EditWidgetDialog = (props) => {
+    const [panel, setPanel] = useState(props.panel);
+    const [widget, setWidget] = useState(cloneDeep(props.current || {}));
+    const [initialWidget,setInitialWidget]=useState(cloneDeep(props.current||{}));
+    const [parameters, setParameters] = useState(()=>WidgetFactory.getEditableWidgetParameters(props.current.name));
+
+    const insert = (before) => {
+        if (!props.insertCallback) return;
+        props.insertCallback(widget, before, panel);
     }
-    showDialog(Dialog){
-        this.dialogHelper.showDialog(Dialog);
-    }
-    updateWidgetState(values,opt_new){
-        let nvalues=undefined;
-        if (opt_new){
-            nvalues=values;
-            let newState={
-                widget: {weight:this.state.widget.weight,...nvalues},
-                parameters:WidgetFactory.getEditableWidgetParameters(nvalues.name)};
-            newState.parameters.forEach((p)=>{
-                p.setDefault(newState.widget);
+    const updateWidgetState = (values, opt_new) => {
+        let nvalues = undefined;
+        if (opt_new) {
+            const nvalues = {...values};
+            let parameters = WidgetFactory.getEditableWidgetParameters(values.name);
+            parameters.forEach((p) => {
+                const v=p.getValue();
+                p.setValue(nvalues,v);
             });
-            this.setState(newState);
-        }
-        else {
-            nvalues = {...this.state.widget, ...values};
-            if (this.state.widget.formatter !== nvalues.formatter){
-                nvalues.formatterParameters=[];
+            setParameters(parameters);
+            setWidget({weight: widget.weight, ...nvalues})
+            setInitialWidget({weight: widget.weight, ...nvalues})
+        } else {
+            nvalues = {...widget, ...values};
+            if (widget.formatter !== nvalues.formatter) {
+                nvalues.formatterParameters = [];
             }
-            this.setState({widget: nvalues})
+            setWidget(nvalues);
         }
     }
 
-    changedParameters(){
+    const changedParameters = () => {
         /**
          * we need to compare
          * the current values (state.widget) and the default values (from state.parameters)
          * the rule is to include in the output anything that differs from the defaults
          * and the name and weight in any case
          */
-        if (! this.state.parameters) return this.state.widget;
-        let filtered=filterByEditables(this.state.parameters,this.state.widget);
-        //filter out the parameters that are really set at the widget itself
-        let widget=WidgetFactory.findWidget(this.state.widget);
-        let rt={};
-        this.state.parameters.forEach((parameter)=>{
-            let fv=parameter.getValue(filtered);
-            if (fv !== undefined){
-                let dv=parameter.getValue(widget);
-                if (Compare(fv,dv)){
+        if (!parameters) return widget;
+        let nwidget = WidgetFactory.findWidget(widget);
+        let rt = {};
+        parameters.forEach((parameter) => {
+            let fv = parameter.getValue(widget);
+            if (fv !== undefined) {
+                let dv = parameter.getValue(nwidget);
+                if (Compare(fv, dv)) {
                     return; //we have set the value that is at the widget anyway - do not write this out
                 }
-                parameter.setValue(rt,fv);
+                parameter.setValue(rt, fv);
             }
         })
-        let fixed=['name','weight'];
-        fixed.forEach((fp)=>{
-            if (filtered[fp] !== undefined) rt[fp]=filtered[fp];
+        let fixed = ['name', 'weight'];
+        fixed.forEach((fp) => {
+            if (widget[fp] !== undefined) rt[fp] = widget[fp];
         });
         return rt;
     }
-    render () {
-        let self=this;
-        let hasCurrent=this.props.current.name !== undefined;
-        let parameters=this.state.parameters;
-        let panelClass="panel";
-        if (this.props.panel !== this.state.panel){
-            panelClass+=" changed";
-        }
-        let completeWidgetData={...cloneDeep(WidgetFactory.findWidget(this.state.widget.name)),...this.state.widget};
-        return (
-            <React.Fragment>
-            <div className="selectDialog editWidgetDialog">
-                <h3 className="dialogTitle">{this.props.title||'Select Widget'}</h3>
-                {(this.props.panelList !== undefined) && <InputSelect className={panelClass}
-                             dialogRow={true}
-                             label="Panel"
-                             value={this.state.panel}
-                             list={(current)=>getList(this.props.panelList,current)}
-                             onChange={(selected)=>{
-                                this.setState({panel:selected.name})
-                                }}
-                             showDialogFunction={this.showDialog}/>
-                }
-                {hasCurrent?
-                    <div className="dialogRow info"><span className="inputLabel">Current</span>{this.props.current.name}</div>
-                    :
-                    null}
-                {(this.props.weight !== undefined)?
-                        <Input className="weigth"
-                               dialogRow={true}
-                               type="number"
-                               label="Weight"
-                               onChange={(ev)=>this.updateWidgetState({weight:ev})}
-                               value={this.state.widget.weight!==undefined?this.state.widget.weight:1}/>
-                    :null}
-                <InputSelect className="selectElement info"
-                    dialogRow={true}
-                    label="New Widget"
-                    onChange={(selected)=>{this.updateWidgetState({name:selected.name},true);}}
-                    list={()=>getList(WidgetFactory.getAvailableWidgets(this.props.types))}
-                    value={this.state.widget.name||'-Select Widget-'}
-                    showDialogFunction={this.showDialog}/>
-                {parameters.map((param)=>{
-                    return ParamValueInput({
-                        param:param,
-                        currentValues:completeWidgetData,
-                        showDialogFunction: self.dialogHelper.showDialog,
-                        onChange:self.updateWidgetState
-                    })
-                })}
-                {(this.state.widget.name !== undefined && this.props.insertCallback)?
-                    <div className="insertButtons">
-                        {hasCurrent?<DB name="before" onClick={()=>this.insert(true)}>Before</DB>:null}
-                        {hasCurrent?<DB name="after" onClick={()=>this.insert(false)}>After</DB>:null}
-                        {(!hasCurrent)?<DB name="after" onClick={()=>this.insert(false)}>Insert</DB>:null}
-                    </div>
-                    :null}
-                <div className="dialogButtons">
-                    {(this.props.removeCallback && (this.state.panel === this.props.panel)) ?
-                        <DB name="delete" onClick={()=>{
-                            this.props.closeCallback();
-                            this.props.removeCallback();
-                        }}>Delete</DB>:null}
-                    <DB name="cancel" onClick={this.props.closeCallback}>Cancel</DB>
-                    {this.props.updateCallback?
-                        <DB name="ok" onClick={()=>{
-                        this.props.closeCallback();
-                        let changes=this.changedParameters();
-                        if (this.props.weight){
-                            if (changes.weight !== undefined) changes.weight=parseFloat(changes.weight)
-                        }
-                        else{
-                            changes.weight=undefined;
-                        }
-                        this.props.updateCallback(changes,this.state.panel);
-                    }}>Update</DB>
-                    :null}
-                </div>
-            </div>
-            </React.Fragment>
-        );
+    let hasCurrent = props.current.name !== undefined;
+    let panelClass = "panel";
+    if (props.panel !== panel) {
+        panelClass += " changed";
     }
+    let completeWidgetData = {...WidgetFactory.findWidget(widget.name), ...widget};
+    let validData=true;
+    parameters.forEach((param)=>{
+        if (param.hasError(completeWidgetData)){
+            validData=false;
+        }
+    })
+    return (
+        <DialogFrame className="selectDialog editWidgetDialog" title={props.title || 'Select Widget'}>
+            {(props.panelList !== undefined) && <InputSelect className={panelClass}
+                                                             dialogRow={true}
+                                                             label="Panel"
+                                                             value={panel}
+                                                             list={(current) => getList(props.panelList, current)}
+                                                             onChange={(selected) => {
+                                                                 setPanel(selected.name)
+                                                             }}
+            />
+            }
+            {hasCurrent ?
+                <DialogRow className="info"><span className="inputLabel">Current</span>{props.current.name}</DialogRow>
+                :
+                null}
+            {(props.weight !== undefined) ?
+                <Input className="weigth"
+                       dialogRow={true}
+                       type="number"
+                       label="Weight"
+                       onChange={(ev) => updateWidgetState({weight: ev})}
+                       value={widget.weight !== undefined ? widget.weight : 1}/>
+                : null}
+            <InputSelect className="selectElement info"
+                         dialogRow={true}
+                         label="New Widget"
+                         onChange={(selected) => {
+                             updateWidgetState({name: selected.name}, true);
+                         }}
+                         list={() => getList(WidgetFactory.getAvailableWidgets(props.types))}
+                         value={widget.name || '-Select Widget-'}
+            />
+            <EditableParameterListUI
+                parameters={parameters}
+                values={completeWidgetData}
+                initialValues={initialWidget}
+                onChange={updateWidgetState}
+            />
+            {(widget.name !== undefined && props.insertCallback) ?
+                <DialogButtons className="insertButtons">
+                    {hasCurrent ? <DB name="before" disabled={!validData} onClick={() => insert(true)}>Before</DB> : null}
+                    {hasCurrent ? <DB name="after" disabled={!validData} onClick={() => insert(false)}>After</DB> : null}
+                    {(!hasCurrent) ? <DB name="after" disabled={!validData} onClick={() => insert(false)}>Insert</DB> : null}
+                </DialogButtons>
+                : null}
+            <DialogButtons>
+                {(props.removeCallback && (panel === props.panel)) ?
+                    <DB name="delete" onClick={() => {
+                        props.removeCallback();
+                    }}>Delete</DB> : null}
+                <DB name="cancel">Cancel</DB>
+                {props.updateCallback ?
+                    <DB name="ok" disabled={!validData} onClick={() => {
+                        let changes = changedParameters();
+                        if (props.weight) {
+                            if (changes.weight !== undefined) changes.weight = parseFloat(changes.weight)
+                        } else {
+                            changes.weight = undefined;
+                        }
+                        props.updateCallback(changes, panel);
+                    }}>Update</DB>
+                    : null}
+            </DialogButtons>
+        </DialogFrame>
+    );
 }
 
-EditWidgetDialog.propTypes={
+EditWidgetDialog.propTypes = {
     title: PropTypes.string,
     panel: PropTypes.string,
     panelList: PropTypes.array,
-    current:PropTypes.any,
+    current: PropTypes.any,
     weight: PropTypes.bool,
     insertCallback: PropTypes.func,
     updateCallback: PropTypes.func,
     removeCallback: PropTypes.func,
-    closeCallback: PropTypes.func.isRequired,
     types: PropTypes.array
 };
 
@@ -209,12 +226,60 @@ const filterObject=(data)=>{
     return data;
 };
 
+export const EditWidgetDialogWithFunc=({widgetItem,pageWithOptions,panelname,opt_options})=>{
+    const panelList=[panelname];
+    if (! opt_options) opt_options={};
+    let index=opt_options.beginning?-1:1;
+    if (widgetItem){
+        index=widgetItem.index;
+    }
+    return <EditWidgetDialog
+        title="Select Widget"
+        panel={panelname}
+        types={opt_options.types}
+        panelList={panelList}
+        current={widgetItem?widgetItem:{}}
+        weight={opt_options.weight}
+        insertCallback={(selected,before,newPanel)=>{
+            if (! selected || ! selected.name) return;
+            let addMode=LayoutHandler.ADD_MODES.noAdd;
+            if (widgetItem){
+                addMode=before?LayoutHandler.ADD_MODES.beforeIndex:LayoutHandler.ADD_MODES.afterIndex;
+            }
+            else{
+                addMode=opt_options.beginning?LayoutHandler.ADD_MODES.beginning:LayoutHandler.ADD_MODES.end;
+            }
+            LayoutHandler.withTransaction(pageWithOptions,(handler)=> {
+                handler.replaceItem(pageWithOptions, newPanel, index, filterObject(selected), addMode);
+            });
+        }}
+        removeCallback={widgetItem?()=>{
+            LayoutHandler.withTransaction(pageWithOptions,(handler)=> {
+                handler.replaceItem(pageWithOptions, panelname, index);
+            });
+        }:undefined}
+        updateCallback={widgetItem?(changes,newPanel)=>{
+            if (newPanel !== panelname){
+                LayoutHandler.withTransaction(pageWithOptions,(handler)=>{
+                    handler.replaceItem(pageWithOptions,panelname,index);
+                    handler.replaceItem(pageWithOptions,newPanel,1,filterObject(changes),LayoutHandler.ADD_MODES.end);
+                })
+            }
+            else{
+                LayoutHandler.withTransaction(pageWithOptions,(handler)=>{
+                    handler.replaceItem(pageWithOptions,panelname,index,filterObject(changes));
+                })
+            }
+        }:undefined}
+    />
+}
+
 /**
  *
  * @param widgetItem
- * @param pagename
+ * @param pageWithOptions
  * @param panelname
- * @param opt_options:
+ * @param opt_options
  *  beginning: insert at the beginning
  *  weight: show weight input
  *  fixPanel: if set: do not allow panel change
@@ -223,58 +288,12 @@ const filterObject=(data)=>{
  */
 EditWidgetDialog.createDialog=(widgetItem,pageWithOptions,panelname,opt_options)=>{
     if (! LayoutHandler.isEditing()) return false;
-    if (! opt_options) opt_options={};
-    let index=opt_options.beginning?-1:1;
-    if (widgetItem){
-        index=widgetItem.index;
-    }
-    OverlayDialog.dialog((props)=> {
-        let panelList=[panelname];
-        if (!opt_options.fixPanel){
-            panelList=LayoutHandler.getPagePanels(pageWithOptions);
-        }
-        if (opt_options.fixPanel instanceof Array){
-            panelList=opt_options.fixPanel;
-        }
-        return <EditWidgetDialog
-            {...props}
-            title="Select Widget"
-            panel={panelname}
-            types={opt_options.types}
-            panelList={panelList}
-            current={widgetItem?widgetItem:{}}
-            weight={opt_options.weight}
-            insertCallback={(selected,before,newPanel)=>{
-                if (! selected || ! selected.name) return;
-                let addMode=LayoutHandler.ADD_MODES.noAdd;
-                if (widgetItem){
-                    addMode=before?LayoutHandler.ADD_MODES.beforeIndex:LayoutHandler.ADD_MODES.afterIndex;
-                }
-                else{
-                    addMode=opt_options.beginning?LayoutHandler.ADD_MODES.beginning:LayoutHandler.ADD_MODES.end;
-                }
-                LayoutHandler.withTransaction(pageWithOptions,(handler)=> {
-                    handler.replaceItem(pageWithOptions, newPanel, index, filterObject(selected), addMode);
-                });
-            }}
-            removeCallback={widgetItem?()=>{
-                    LayoutHandler.withTransaction(pageWithOptions,(handler)=> {
-                        handler.replaceItem(pageWithOptions, panelname, index);
-                    });
-            }:undefined}
-            updateCallback={widgetItem?(changes,newPanel)=>{
-                if (newPanel !== panelname){
-                    LayoutHandler.withTransaction(pageWithOptions,(handler)=>{
-                        handler.replaceItem(pageWithOptions,panelname,index);
-                        handler.replaceItem(pageWithOptions,newPanel,1,filterObject(changes),LayoutHandler.ADD_MODES.end);
-                    })
-                }
-                else{
-                    LayoutHandler.withTransaction(pageWithOptions,(handler)=>{
-                        handler.replaceItem(pageWithOptions,panelname,index,filterObject(changes));
-                    })
-                }
-            }:undefined}
+    showDialog(undefined,()=>{
+        return <EditWidgetDialogWithFunc
+            pageWithOptions={pageWithOptions}
+            panelname={panelname}
+            widgetItem={widgetItem}
+            opt_options={opt_options}
             />
     });
     return true;

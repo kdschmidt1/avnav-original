@@ -2,11 +2,13 @@ import Requests from './requests.js';
 import globalStore from './globalstore.jsx';
 import keys,{KeyHelper} from './keys.jsx';
 import KeyHandler from './keyhandler.js';
-import base from '../base.js';
+import base from '../base.ts';
 import assign from 'object-assign';
 import LocalStorage, {STORAGE_NAMES} from './localStorageManager';
 
 import defaultLayout from '../layout/default.json';
+import cloneDeep from "clone-deep";
+import Helper from "./helper";
 const DEFAULT_NAME="system.default";
 
 const ACTION_MOVE=1;
@@ -23,6 +25,16 @@ const getPagename=(page)=>{
     if (page === undefined) return;
     if (typeof(page) === 'string') return page;
     return page.layoutPage || page.location;
+}
+
+class PluginLayout{
+    constructor(name,pluginName,timestamp,url,data) {
+        this.name=name;
+        this.url=url;
+        this.timestamp=timestamp;
+        this.data=data;
+        this.pluginName=pluginName;
+    }
 }
 
 class LayoutAction{
@@ -76,102 +88,33 @@ class LayoutTransaction{
     }
 }
 
-class LayoutHandler{
-    constructor(){
-        this.layout=undefined;
-        this.name=undefined;
-        this.propertyDescriptions=KeyHelper.getKeyDescriptions(true);
+export class LayoutAndName{
+    constructor(name,layout) {
+        this.name = name;
+        this.layout = layout;
+    }
+}
+const USER_PREFIX="user.";
+class LayoutLoader{
+    constructor() {
         this.storeLocally=!globalStore.getData(keys.gui.capabilities.uploadLayout,false);
         this.temporaryLayouts={};
         this.temporaryLayouts[DEFAULT_NAME]=defaultLayout;
-        this.dataChanged=this.dataChanged.bind(this);
-        this._setEditing(false);
-        this.hiddenPanels={}; //panels we removed during editing
-        this.temporaryOptions={}; //options being set during edit
-        globalStore.register(this,keys.gui.capabilities.uploadLayout);
-        this.actions=[];
-        this.currentTransaction=undefined;
-    }
-    dataChanged(skeys){
-        this.storeLocally=!globalStore.getData(keys.gui.capabilities.uploadLayout,false);
+        globalStore.register(()=>{
+            this.storeLocally=!globalStore.getData(keys.gui.capabilities.uploadLayout,false);
+        },keys.gui.capabilities.uploadLayout);
+        this.pluginLayouts={};
+        this.prefixes={};
     }
 
-    hasLoaded(name){
-        return (name == this.name && this.layout);
+    async init(){
+        await Requests.getJson({
+            type:'layout',
+            command:'prefixes'
+        }).then((json)=>{
+            this.prefixes=json.data
+        },()=>{})
     }
-    isActiveLayout(name){
-        if (name === undefined) name=this.name;
-        return name == globalStore.getData(keys.properties.layoutName);
-    }
-
-    canEdit(name){
-        if (name === undefined) name=this.name;
-        if (! name) return false;
-        return name.match(/^user\./)?true:false;
-    }
-    startEditing(name){
-        if (! this.canEdit(name)) return false;
-        this.name=name;
-        this._setEditing(true);
-        this.setTemporaryOptionValues();
-    }
-    isEditing(){
-        return this.editing;
-    }
-
-    loadStoredLayout(opt_remoteFirst){
-        let self=this;
-        return new Promise((resolve,reject)=> {
-            let layoutName=globalStore.getData(keys.properties.layoutName);
-            //if we selected the default layout we will always use our buildin (if store locally)
-            //or load from the server
-            if (layoutName !== DEFAULT_NAME && ! opt_remoteFirst) {
-                let storedLayout = this._loadFromStorage();
-                if (storedLayout && (storedLayout.name == layoutName) && storedLayout.data) {
-                    this.name = storedLayout.name;
-                    this.layout = storedLayout.data;
-                    this.temporaryLayouts[this.name] = this.layout;
-                    self.activateLayout();
-                    resolve(this.layout);
-                    return;
-                }
-            }
-            this.loadLayout(layoutName)
-                .then((layout)=>{
-                    this.activateLayout();
-                    resolve(this.layout);
-                })
-                .catch((error)=>{
-                    if (opt_remoteFirst) {
-                        let storedLayout = this._loadFromStorage();
-                        if (storedLayout && (storedLayout.name == layoutName) && storedLayout.data) {
-                            this.name = storedLayout.name;
-                            this.layout = storedLayout.data;
-                            this.temporaryLayouts[this.name] = this.layout;
-                            self.activateLayout();
-                            resolve(this.layout);
-                            return;
-                        }
-                    }
-                    let description=KeyHelper.getKeyDescriptions()[keys.properties.layoutName];
-                    if (description && description.defaultv){
-                        if (layoutName != description.defaultv){
-                            globalStore.storeData(keys.properties.layoutName,description.defaultv);
-                            self.loadLayout(description.defaultv).then(()=>{
-                                self.activateLayout();
-                                resolve(self.layout);
-                            }).catch((error)=>{
-                                reject("unable to load default layout: "+error);
-                            })
-                        }
-                    }
-                    else{
-                        reject("unable to load application layout "+layoutName+": "+error);
-                    }
-                });
-        });
-    }
-
     /**
      * load a layout from local storage
      * @private
@@ -190,147 +133,157 @@ class LayoutHandler{
         }
 
     }
-    _setEditing(on){
-        this.editing=on;
-        this.resetActions();
-        globalStore.storeData(keys.gui.global.layoutEditing,on);
-    }
 
+    async loadStoredLayout(opt_remoteFirst) {
+        let layoutName = globalStore.getData(keys.properties.layoutName);
+        //if we selected the default layout we will always use our buildin (if store locally)
+        //or load from the server
+        if (layoutName !== DEFAULT_NAME && !opt_remoteFirst) {
+            let storedLayout = this._loadFromStorage();
+            if (storedLayout && (storedLayout.name == layoutName) && storedLayout.data) {
+                this.temporaryLayouts[storedLayout.name] = storedLayout;
+                return Promise.resolve(new LayoutAndName(storedLayout.name, storedLayout.data));
+            }
+        }
+        try {
+            const layout = await this.loadLayout(layoutName);
+            return new LayoutAndName(layoutName, layout);
+        } catch (error) {
+            if (opt_remoteFirst) {
+                let storedLayout = this._loadFromStorage();
+                if (storedLayout && (storedLayout.name == layoutName) && storedLayout.data) {
+                    this.temporaryLayouts[storedLayout.name] = storedLayout.data;
+                    return new LayoutAndName(storedLayout.name, storedLayout.data);
+                }
+            }
+            let description = KeyHelper.getKeyDescriptions()[keys.properties.layoutName];
+            if (description && description.defaultv) {
+                if (layoutName != description.defaultv) {
+                    globalStore.storeData(keys.properties.layoutName, description.defaultv);
+                    try {
+                        const dlayout = await this.loadLayout(description.defaultv);
+                        return new LayoutAndName(description.defaultv, dlayout);
+                    } catch (error) {
+                        throw new Error("unable to load default layout: " + error);
+                    }
+                } else {
+                    throw new Error("unable to load application layout " + layoutName + ": " + error);
+                }
+            }
+        }
+    }
     /**
      * loads a layout but still does not activate it
      * @param name
+     * @param opt_raw
      */
-    loadLayout(name, opt_checkOnly){
-        let self=this;
-        if (! opt_checkOnly) {
-            this.layout=undefined;
-            this.name=name;
-            this._setEditing(false);
-        }
-        return new Promise((resolve,reject)=> {
-            if (this.storeLocally){
-                if (!this.temporaryLayouts[name]) {
-                    reject("layout "+name+" not found");
+    async loadLayout(name,opt_raw) {
+        if (this.storeLocally) {
+            if (!this.temporaryLayouts[name]) {
+                return Promise.reject("layout " + name + " not found");
+            } else {
+                let layout = this.temporaryLayouts[name];
+                if (opt_raw){
+                    return Promise.resolve(JSON.stringify(layout,undefined, 2));
                 }
-                else {
-                    let layout=this.temporaryLayouts[name];
-                    if (! opt_checkOnly) this.layout=layout;
-                    resolve(layout);
-                }
-                return;
+                return Promise.resolve(layout);
             }
-            Requests.getJson("?request=download&noattach=true&type=layout&name=" +
-                encodeURIComponent(name), {checkOk: false}).then(
-                (json)=> {
-                    let error=self.checkLayout(json);
-                    if (error !== undefined){
-                        reject("layout error: "+error);
-                        return;
+        }
+        try {
+            let layoutJson;
+            const pluginLayout = this.pluginLayouts[name];
+            if (pluginLayout) {
+                if (pluginLayout.data){
+                    layoutJson = pluginLayout.data;
+                }
+                if (pluginLayout.url){
+                    const layout=await Requests.getHtmlOrText(pluginLayout.url);
+                    if (layout){
+                        layoutJson=JSON.parse(layout);
                     }
-                    if (! opt_checkOnly) this.layout = json;
-                    resolve(json);
-                },
-                (error)=> {
-                    try {
-                        let raw = LocalStorage.getItem(
-                            STORAGE_NAMES.LAYOUT
-                        );
-                        if (raw) {
-                            let layoutData=JSON.parse(raw);
-                            if (layoutData.name == name && layoutData.data){
-                                if (! opt_checkOnly) {
-                                    this.layout = layoutData.data;
-                                    if (name.match(/^user\./)) {
-                                        self.uploadLayout(name.replace(/^user\./, ''), this.layout)
-                                            .then(() => {
-                                            })
-                                            .catch(() => {
-                                            });
-                                    }
-                                }
-                                resolve(layoutData.data);
-                                return;
-                            }
-
+                    else{
+                        throw new Error("unable to load plugin layout "+pluginLayout.url);
+                    }
+                }
+            }
+            else {
+                layoutJson = await Requests.getJson({
+                    request: 'api',
+                    type: 'layout',
+                    command: 'download',
+                    noattach: true,
+                    name: name
+                }, {checkOk: false});
+            }
+            if (!layoutJson) {
+                throw new Error("unable to load layout "+name);
+            }
+            let error = this.checkLayout(layoutJson);
+            if (error !== undefined) {
+                throw new Error("layout error: " + error);
+            }
+            if (opt_raw) {
+                return JSON.stringify(layoutJson, undefined, 2);
+            }
+            return layoutJson;
+        }catch (error)
+            {
+                try {
+                    let raw = LocalStorage.getItem(
+                        STORAGE_NAMES.LAYOUT
+                    );
+                    if (raw) {
+                        let layoutData = JSON.parse(raw);
+                        if (layoutData.name == name && layoutData.data) {
+                            return layoutData.data;
                         }
-                    }catch(e){
-                        base.log("error when trying to read layout locally: "+e);
                     }
-                    reject("" + error);
+                } catch (e) {
+                    base.log("error when trying to read layout locally: " + e);
                 }
-            );
-        });
-    }
-
-    nameToBaseName(name){
-        return name.replace(/^user\./,'').replace(/^system\./,'').replace(/^plugin\./,'').replace(/\.json$/,'').replace(/.*\./,'');
-    }
-
-    uploadLayout(name,layout,opt_overwrite){
-        if (! name || ! layout){
-            return new Promise((resolve,reject)=>{
-               reject("missing parameter name or layout");
-            });
-        }
-        //the provided name should always be without the user./system. prefix
-        //when we upload we always create a user. entry...
-        name=this.nameToBaseName(name);
-        return new Promise((resolve, reject)=> {
-            try {
-                if (typeof(layout) === 'string') {
-                    layout = JSON.parse(layout);
-                }
-                let error = this.checkLayout(layout);
-                if (error) {
-                    reject(error);
-                    return;
-                }
-            } catch (e) {
-                reject(e);
-                return;
+                throw error;
             }
-            let layoutName=this.fileNameToServerName(name);
-            let isActive=this.isActiveLayout(layoutName);
-            if (this.storeLocally) {
-                this.temporaryLayouts[layoutName] = layout;
-                if (isActive){
-                    this.name=layoutName;
-                    this.layout=layout;
-                    this.activateLayout();
-                }
-                resolve({status:'OK'});
-                return;
-            }
-            Requests.postPlain({
-                request:'upload',
-                type:'layout',
-                name: layoutName,
-                overwrite: !! opt_overwrite
-            }, JSON.stringify(layout,undefined,2)).
-                then((result)=>{
-                    if (isActive){
-                        this.name=layoutName;
-                        this.layout=layout;
-                        this.activateLayout();
-                    }
-                    resolve(result);
-                }).
-                catch((error)=>{
-                    reject(error);
-                })
-        });
+
     }
 
     /**
-     * get the name the server will create from our local file name when we upload a layout
-     * @param name
-     * @returns {string}
+     * upload a layout to the server
+     * @param name the layout name without user prefix and without .json
+     * @param layout
+     * @param opt_overwrite
+     * @returns {Promise<never>|Promise<Awaited<{status: string}>>|Promise<unknown>}
      */
-    fileNameToServerName(name){
-        name=this.nameToBaseName(name);
-        return "user."+name;
+    uploadLayout(name, layout, opt_overwrite,opt_completeName) {
+        if (!name || !layout) {
+            return Promise.reject("missing parameter name or layout");
+        }
+        //the provided name should always be without the user./system. prefix
+        //when we upload we always create a user. entry...
+        try {
+            if (typeof (layout) === 'string') {
+                layout = JSON.parse(layout);
+            }
+            let error = this.checkLayout(layout);
+            if (error) {
+                return Promise.reject(error);
+            }
+        } catch (e) {
+            return Promise.reject(e);
+        }
+        if (this.storeLocally) {
+            const localName=opt_completeName?name:USER_PREFIX+name;
+            this.temporaryLayouts[localName] = layout;
+            return Promise.resolve({status: 'OK'});
+        }
+        return Requests.postPlain({
+            request:'api',
+            command: 'upload',
+            type: 'layout',
+            name: name,
+            overwrite: !!opt_overwrite,
+            completeName:!!opt_completeName,
+        }, JSON.stringify(layout, undefined, 2))
     }
-
     /**
      * check the layout
      * returns an error string if there are errors
@@ -342,12 +295,297 @@ class LayoutHandler{
         return;
     }
 
+    async listLayouts() {
+        let activeLayout = globalStore.getData(keys.properties.layoutName);
+        if (this.storeLocally) {
+            let rt = [];
+            for (let k in this.temporaryLayouts) {
+                let item = {
+                    name: k,
+                    type: 'layout',
+                    server: false,
+                    canDelete: k != activeLayout,
+                    active: k == activeLayout,
+                    checkPrefix: USER_PREFIX,
+                    time: (new Date()).getTime() / 1000
+                };
+                rt.push(item);
+            }
+            return rt;
+        }
+        const layouts=await Requests.getJson({
+            request:'api',
+            type:'layout',
+            command:'list'
+        }).then((json) => {
+            let list = [];
+            for (let i = 0; i < json.items.length; i++) {
+                let fi = {};
+                assign(fi, json.items[i]);
+                fi.type = 'layout';
+                fi.server = true;
+                if (activeLayout == fi.name) {
+                    fi.canDelete = false;
+                    fi.active = true;
+                }
+                list.push(fi);
+            }
+            return list;
+        });
+        for (let k in this.pluginLayouts){
+            layouts.push({
+                name:k,
+                server: false,
+                canDelete: false,
+                canDownload: true,
+                active: k == activeLayout,
+                type:'layout',
+                time: this.pluginLayouts[k].timestamp,
+                downloadName: this.pluginLayouts[k].name+".json"
+            })
+        }
+        return layouts;
+    }
 
+    /**
+     * delete an item
+     * resolves true if handled
+     * @param name
+     * @returns {Promise}
+     */
+    deleteLayout(name){
+        if (this.storeLocally) {
+                delete this.temporaryLayouts[name];
+                return Promise.resolve(true);
+        }
+        return Requests.getJson({
+            request:'api',
+            command: 'delete',
+            type: 'layout',
+            name: name
+        })
+    }
+    renameLayout(name,newName){
+        if (! name) throw new Error("no name for deleteLayout");
+        if (! name.startsWith(USER_PREFIX)){
+            throw new Error("can only rename user layouts");
+        }
+        if (! newName.startsWith(USER_PREFIX)){
+            throw new Error("the new layout name must also start with "+USER_PREFIX);
+        }
+        if (this.storeLocally){
+            if (this.temporaryLayouts[newName]) {
+                throw new Error("layout " + newName + " already exists");
+            }
+            const layout=this.temporaryLayouts[name];
+            if (! layout) throw new Error("layout "+name+" not found");
+            delete this.temporaryLayouts[name];
+            this.temporaryLayouts[newName] = layout;
+            return Promise.resolve(true);
+        }
+        return Requests.getJson({
+            command:'rename',
+            type:'layout',
+            name: name,
+            newName: newName
+        })
+    }
+    getUserPrefix(){
+        return USER_PREFIX;
+    }
+    addPluginLayout(name,pluginName,timestamp,data,url){
+        if (! this.prefixes || ! this.prefixes.plugin) throw Error("no support for plugin layouts");
+        if (! name || ! pluginName) throw new Error("name and pluginName must be set");
+        if (! data && ! url) throw new Error("either url or data must be set for a plugin layout");
+        if (data){
+            this.checkLayout(data);
+        }
+        const completeName=this.prefixes.plugin+pluginName+"."+name;
+        if (this.pluginLayouts[completeName]){
+            if (this.pluginLayouts[completeName].pluginName !== pluginName) {
+                throw new Error(`layout ${completeName} already exists from ${this.pluginLayouts[completeName].pluginName}`);
+            }
+        }
+        const pluginLayout=new PluginLayout(name,pluginName,timestamp,url,data);
+        this.pluginLayouts[completeName]=pluginLayout;
+        if (url && ! timestamp){
+            Requests.getLastModified(url).then((lm)=>{
+                const ts=(new Date(lm)).getTime()/1000;
+                pluginLayout.timestamp=ts;
+            },()=>{});
+        }
+        return completeName;
+    }
+    removePluginLayouts(pluginName){
+        if (! pluginName) throw new Error("no support for plugin layouts");
+        const deletes=[];
+        for (let k in this.pluginLayouts){
+            if (this.pluginLayouts[k].pluginName === pluginName) deletes.push(k);
+        }
+        deletes.forEach((del)=>{
+            delete this.pluginLayouts[del];
+        })
+    }
+}
+
+export const layoutLoader=new LayoutLoader();
+
+const FORBIDDEN_LAYOUTSETTINGS=[
+    keys.properties.layoutName
+]
+class LayoutHandler{
+    constructor(){
+        this.layout=undefined;
+        this.name=undefined;
+        this._setEditing(false);
+        this.hiddenPanels={}; //panels we removed during editing
+        this.temporaryOptions={}; //options being set during edit
+        this.actions=[];
+        this.currentTransaction=undefined;
+        this.styleSheet=document.createElement("style");
+        this.styleSheet.setAttribute("id","layoutStyle");
+        document.head.appendChild(this.styleSheet);
+        this.savedLayout=undefined;
+        this.storeProviderId = globalStore.registerProvider(
+            (key) => {
+                if (this.layout && this.layout.properties) {
+                    return key in this.layout.properties
+                }
+                return false;
+            },
+            (key) => {
+                if (this.layout && this.layout.properties) {
+                    return this.layout.properties[key];
+                }
+            }
+        );
+        const propertyKeys=KeyHelper.flattenedKeys(keys.properties);
+        this.allowedLayoutProperties={}
+        propertyKeys.forEach(propertyKey=>{
+            if (FORBIDDEN_LAYOUTSETTINGS.indexOf(propertyKey) < 0 ) {
+                this.allowedLayoutProperties[propertyKey] = true;
+            }
+        })
+    }
+    getAllowedLayoutProperties(){
+        return {...this.allowedLayoutProperties};
+    }
+    canEdit(name){
+        if (name === undefined) name=this.name;
+        if (! name) return false;
+        return Helper.startsWith(name,USER_PREFIX);
+    }
+    saveCurrent(){
+        this.savedLayout=new LayoutAndName(this.name, cloneDeep(this.layout));
+    }
+    restoreSaved(){
+        if (this.savedLayout){
+            this.name=this.savedLayout.name;
+            this._setLayout(this.savedLayout.layout);
+        }
+        this.activateLayout();
+    }
+    startEditing(name){
+        if (! this.canEdit(name)) throw new Error(`invalid layout name ${name} for editing`);
+        this.name=name;
+        this.saveCurrent();
+        this._setEditing(true);
+        this.setTemporaryOptionValues();
+        return true;
+    }
+    resetEditing(){
+        if (! this.isEditing()) return false;
+        this.restoreSaved();
+        return true;
+    }
+    isEditing(){
+        return this.editing;
+    }
+
+    async loadStoredLayout(opt_remoteFirst){
+        const layout=await layoutLoader.loadStoredLayout(opt_remoteFirst)
+            .then((layoutAndName)=>{
+                this.setLayoutAndName(layoutAndName.layout,layoutAndName.name,true);
+                return layoutAndName.layout;
+            },(err)=>base.log("error while loading stored layout "+err));
+        return layout;
+    }
+    _setEditing(on){
+        this.editing=on;
+        this.resetActions();
+        globalStore.storeData(keys.gui.global.layoutEditing,on);
+    }
+    _setLayout(layout){
+        this.layout=layout;
+        if (layout && layout.css){
+            this.styleSheet.textContent=layout.css;
+        }
+        else{
+            this.styleSheet.textContent="";
+        }
+    }
+    setLayoutAndName(layout,name,opt_activate){
+        this.name=name;
+        this._setLayout(layout);
+        if (opt_activate){
+            this.activateLayout()
+        }
+    }
+    getCss(){
+        if (! this.layout) return;
+        return this.layout.css;
+    }
+    getLayoutProperties(layout){
+        if (! layout) layout=this.layout;
+        if (! layout) return {};
+        const rt={};
+        if (! layout.properties) return rt;
+        for (let k in this.allowedLayoutProperties){
+            if (k in layout.properties){
+                rt[k] = layout.properties[k];
+            }
+        }
+        return rt;
+    }
+
+    /**
+     * set the layout properties
+     * no check, no copy
+     * @param properties
+     */
+    updateLayoutProperties(properties){
+        if (! this.layout) return;
+        if (!properties || Object.keys(properties).length === 0) {
+            delete this.layout.properties;
+        }
+        this.layout.properties={};
+        for (let k in this.allowedLayoutProperties){
+            if (k in properties){
+                this.layout.properties[k] = properties[k];
+            }
+        }
+    }
+    updateCss(css){
+        if (! this.layout) return;
+        this.layout.css=css;
+        this._setLayout(this.layout);
+    }
+    hasLoaded(layoutName){
+        if (this.name !== layoutName)return false;
+        if (! this.layout) return false;
+        return true;
+    }
     getLayoutWidgets(){
         if (! this.layout || ! this.layout.widgets) return {};
         return this.layout.widgets;
     }
-    activateLayout(upload){
+    getLayout(){
+        return this.layout||{};
+    }
+    getName(){
+        return this.name;
+    }
+    activateLayout(){
         this._removeHiddenPanels();
         this._setEditing(false);
         if (!this.layout) return false;
@@ -364,11 +602,6 @@ class LayoutHandler{
         }
         globalStore.storeData(keys.properties.layoutName,this.name);
         this.incrementSequence();
-        if (upload){
-            this.uploadLayout(this.name,this.layout,true).then(()=>{}).catch((error)=>{
-               base.log("unable to upload layout "+error);
-            });
-        }
         return true;
     }
     incrementSequence(){
@@ -471,7 +704,9 @@ class LayoutHandler{
         let tryList=this.getPanelTryList(basename,options);
         for (let i=0;i<tryList.length;i++){
             let list=this.getDirectPanelData(page,tryList[i]);
-            if (list) return {name:tryList[i],list:list};
+            if (list) {
+                return {name:tryList[i],list:list};
+            }
         }
         return {name:basename};
     }
@@ -637,7 +872,7 @@ class LayoutHandler{
     }
 
     moveItem(pageWithOptions,panel,oldIndex,newIndex,opt_newPanel){
-        console.log("moveItem",pageWithOptions,panel,oldIndex,newIndex,opt_newPanel);
+        base.log("moveItem",pageWithOptions,panel,oldIndex,newIndex,opt_newPanel);
         if (oldIndex == newIndex && (opt_newPanel === undefined || panel === opt_newPanel)) return true;
         if (! this.isEditing()) return false;
         const page=getPagename(pageWithOptions);
@@ -685,77 +920,6 @@ class LayoutHandler{
         this.incrementSequence();
         return true;
     }
-    listLayouts(){
-        return new Promise((resolve,reject)=>{
-            let activeLayout=globalStore.getData(keys.properties.layoutName);
-            if (this.storeLocally){
-               let rt=[];
-               for (let k in this.temporaryLayouts){
-                   let item={
-                       name:k,
-                       type:'layout',
-                       server:false,
-                       canDelete:k != activeLayout,
-                       active: k == activeLayout,
-                       time: (new Date()).getTime()/1000
-                   };
-                   rt.push(item);
-               }
-               resolve(rt);
-               return;
-            }
-            Requests.getJson("?request=listdir&type=layout").then((json)=> {
-                let list = [];
-                for (let i = 0; i < json.items.length; i++) {
-                    let fi = {};
-                    assign(fi, json.items[i]);
-                    fi.type = 'layout';
-                    fi.server = true;
-                    if (activeLayout == fi.name) {
-                        fi.canDelete = false;
-                        fi.active=true;
-                    }
-                    list.push(fi);
-                }
-                resolve(list);
-            }).catch((error)=>{reject(error)});
-
-        });
-    }
-
-    /**
-     * get a layout fetch function for downloads we handle this locally
-     * @param name
-     */
-    getLocalDownload() {
-        if (!this.storeLocally) return;
-        return (name) => {
-            let layout = this.temporaryLayouts[name];
-            if (!layout) return;
-            return JSON.stringify(layout, null, 2);
-        };
-    }
-
-    /**
-     * delete an item
-     * resolves true if handled
-     * @param name
-     * @returns {Promise}
-     */
-    deleteItem(name){
-        if (this.storeLocally) {
-            return new Promise((resolve, reject) => {
-                delete this.temporaryLayouts[name];
-                resolve(true);
-            });
-        }
-        return Requests.getJson({
-            request: 'delete',
-            type: 'layout',
-            name: name
-        })
-    }
-
     getStoreKeys(others){
         let rt={
             layoutSequence:keys.gui.global.layoutSequence,
@@ -863,4 +1027,5 @@ LayoutHandler.prototype.ADD_MODES={
     beforeIndex: 3,
     afterIndex: 4
 };
+
 export default  new LayoutHandler();

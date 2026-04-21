@@ -5,13 +5,14 @@ import org.eclipse.jgit.storage.file.FileRepositoryBuilder
 import org.eclipse.jgit.lib.Repository
 import org.eclipse.jgit.lib.ObjectId
 import org.gradle.api.*
+import org.redline_rpm.header.*;
 buildscript{
     repositories{
         mavenCentral()
     }
     dependencies{
         classpath localGroovy()
-        classpath 'com.netflix.nebula:gradle-ospackage-plugin:11.1.0'
+        classpath 'com.netflix.nebula:gradle-ospackage-plugin:12.1.0'
         classpath 'commons-net:commons-net:3.3'
         classpath 'org.eclipse.jgit:org.eclipse.jgit:4.6.0.201612231935-r'
         classpath group: 'org.ccil.cowan.tagsoup', name: 'tagsoup', version: '1.2.1'
@@ -68,6 +69,38 @@ else{
     logger.warn("ANDROID_HOME not set, cannot build android")
 }
 
+def taskgroup="avnav"
+
+task raspiDeb{
+    group taskgroup
+    doFirst(){
+        println("###raspi builds###")
+    }
+}
+
+def OLD_RASPI=[
+    [prefix:'avnav-raspi',buildscript:'raspi.gradle']
+]
+def RASPI_BUILDS=[
+    [prefix:'avnav-raspi-base',buildscript:'raspi-base.gradle'],
+    [prefix:'avnav-raspi-network',buildscript:'raspi-network.gradle']
+]
+
+//create build tasks
+def ALL_RASPI_BUILDS=project.hasProperty('oldRaspi')?OLD_RASPI+RASPI_BUILDS:RASPI_BUILDS
+
+def buildPackageName(prefix){
+    return "${prefix}_${project.avnavVersion}_all.deb"
+}
+def ALL_PACKAGES=[buildPackageName('avnav')]
+ALL_RASPI_BUILDS.each { p->
+    apply from: "${p.buildscript}"
+    def t="build_${p.prefix}".replace('-','_').replace('avnav_','');
+    raspiDeb.dependsOn t
+    ALL_PACKAGES << buildPackageName(p.prefix)
+}
+
+println("###ALL_DEB_PACKAGES: ${ALL_PACKAGES}")
 
 description="NMEA multiplexer and Browser based navigation"
 apply plugin: 'java'
@@ -85,7 +118,6 @@ task testGit{
     }
 }
 
-def taskgroup="avnav"
 ['assembleRelease','assembleDebug','assembleBeta','clean'].each { tt ->
     tasks.create(name:"${tt}Android",type: GradleBuild) {
         group taskgroup
@@ -145,16 +177,7 @@ task windowsBuild(type: org.gradle.api.tasks.GradleBuild){
 }
 
 def emptyBase=new File(project.buildDir,"empty")
-ospackage {
-    //release='3'
-    os = LINUX // only applied to RPM
-    packageGroup='misc'
-    packageName='avnav'
-    requires('python3-pip')
-    requires('python3-pyudev')
-    requires('python3-imaging').or('python3-pil')
-    requires('python3-netifaces')
-    user='root'
+def baseFiles={
     into ('/usr/lib/avnav') {
         from('viewer/build/release') {
             into 'viewer'
@@ -238,6 +261,19 @@ ospackage {
             rename('avnavuser.service','avnav.service')
         }
     }
+}
+def baseCfg= {
+    //release='3'
+    os = LINUX // only applied to RPM
+    packageGroup='misc'
+    packageName='avnav'
+    requires('python3-pip')
+    requires('python3-pyudev')
+    requires('python3-imaging').or('python3-pil')
+    requires('python3-netifaces')
+    requires('python3-legacy-cgi').or('python3','3.13',Flags.LESS)
+    user='root'
+    getDelegate().with baseFiles
     postInstall file('linux/postinstall')
 
     link('/usr/bin/avnav','/usr/lib/avnav/avnav')
@@ -251,7 +287,7 @@ task buildZip(type: Zip){
     dependsOn 'releaseViewer',pkgVersion, zipMarker
     group taskgroup
     includeEmptyDirs=false
-    with ospackage.delegateCopySpec
+    getDelegate().with baseFiles
     eachFile{ d->
         if (!d.getPath().matches("^usr/lib/avnav.*")) {
             d.exclude()
@@ -275,15 +311,10 @@ task buildZip(type: Zip){
     }
 }
 
-task raspiDeb(type: GradleBuild){
-    group taskgroup
-    buildFile="raspi.gradle"
-    tasks=['raspiDeb']
-}
-
 
 
 task releaseRpm(type: Rpm) {
+    getDelegate().with baseCfg
     group taskgroup
     arch = NOARCH
     dependsOn 'releaseViewer',pkgVersion
@@ -297,7 +328,8 @@ task releaseRpm(type: Rpm) {
     requires('python3-GDAL').or('python3-gdal')
 }
 
-task releaseDeb(type: Deb) {
+task releaseDeb(type: Deb){
+    getDelegate().with baseCfg
     group taskgroup
     dependsOn 'releaseViewer',pkgVersion
     requires('bluetooth')
@@ -340,14 +372,10 @@ def UPLOAD_GROUP="avnavUpload"
 
 task uploadDeb(type: UploadTask){
     group=UPLOAD_GROUP
-    inputFile=file("$buildDir/distributions/avnav_${project.avnavVersion}_all.deb")
+    inputFiles=fileTree("$buildDir/distributions",{
+        include ALL_PACKAGES
+    })
     dependsOn releaseDeb
-    baseDir="daily/${project.avnavVersion}"
-}
-task uploadRaspi(type: UploadTask){
-    group=UPLOAD_GROUP
-    inputFile=file("$buildDir/distributions/avnav-raspi_${project.avnavVersion}_all.deb")
-    dependsOn raspiDeb
     baseDir="daily/${project.avnavVersion}"
 }
 task uploadZip(type: UploadTask){
@@ -373,8 +401,7 @@ task uploadWindowsNet(type: UploadTask){
 
 task uploadRepoDaily(type: UploadSftp){
     inputFiles=fileTree("$buildDir/distributions",{
-        include "avnav_${project.avnavVersion}_all.deb"
-        include "avnav-raspi_${project.avnavVersion}_all.deb"
+        include ALL_PACKAGES
     })
     server='free-x.de'
     base=''
@@ -388,8 +415,7 @@ task uploadRepoDaily(type: UploadSftp){
 
 task uploadRepoRelease(type: UploadSftp){
     inputFiles=fileTree("$buildDir/distributions",{
-        include "avnav_${project.avnavVersion}_all.deb"
-        include "avnav-raspi_${project.avnavVersion}_all.deb"
+        include ALL_PACKAGES
     })
     server='free-x.de'
     base=''
@@ -639,6 +665,27 @@ class MySlurper extends XmlSlurper{
     }
 }
 
+def checkOnlineLink(url){
+    try{
+        def urlc=new URL(url);
+        HttpURLConnection connection = (HttpURLConnection) urlc.openConnection()
+        connection.setRequestMethod("HEAD")
+        connection.setConnectTimeout(10000)
+        connection.connect()
+        if (connection.responseCode == 200 || connection.responseCode == 201 || connection.responseCode == 301 || connection.responseCode == 302 ) {
+            logger.info("check for ${url} ok")
+            return true;
+        } else {
+            println("check for ${url} failed: ${connection.responseCode}")
+        }
+    } catch (Throwable t){
+        logger.info("exception while testing ${url}: ${t}")
+        return false;
+    }
+    return false
+}
+def ONLINEBASE="https://www.wellenvogel.de/software/avnav"
+def ONLINEPATTERN=['downloads','configGen','viewern']
 task findBrokenLinks(type: DefaultTask){
     def baseDir="docs"
     def list=fileTree(baseDir,{
@@ -672,7 +719,15 @@ task findBrokenLinks(type: DefaultTask){
             if (link.isEmpty()) link=node.@href
             if (link.isEmpty()) return;
             link=link.toString()
-            if (link.startsWith("http")) return; //TODO: check online links?
+            if (link.startsWith("http")) {
+                if (project.hasProperty("noOnlineCheck")){
+                    return
+                }
+                if (!checkOnlineLink(link)){
+                    println("##$pageName:$line:$link")
+                }
+                return
+            }
             if (link.startsWith("mailto:")) return;
             link=link.replaceAll("[?].*","")
             def parts=link.split('#')
@@ -680,10 +735,20 @@ task findBrokenLinks(type: DefaultTask){
             if (pageLink.endsWith("html")){
                 pageLink=pageLink.replaceAll("/([^/]*)\$","/"+prefix+'$1')
             }
-            if (!pageLink.isEmpty()){        
-                def target=file("$baseDir/$relPath$pageLink")
+            if (!pageLink.isEmpty()){ 
+                def urlbase="$baseDir/$relPath$pageLink"       
+                def target=file("$urlbase")
                 if (!target.exists()){
-                    println("##$pageName:$line:$relPath$pageLink")
+                    def checkOnline=false
+                    if (! project.hasProperty("noOnlineCheck")){
+                        ONLINEPATTERN.each { op ->
+                            if (urlbase.indexOf(op) >= 0){checkOnline=true;}
+                        }
+                    }
+                    def url="$ONLINEBASE/$urlbase"
+                    if (! checkOnline ||  ! checkOnlineLink(url)){
+                        println("##$pageName:$line:$relPath$pageLink")
+                    }
                 }
             }
             if (parts.length > 1){
@@ -772,7 +837,7 @@ task upload{
     doLast {
         println "###uploaded artifacts to version dir $project.avnavVersion###"
     }
-    dependsOn uploadDeb,uploadRaspi,uploadRpm,uploadViewer, uploadZip
+    dependsOn uploadDeb,uploadRpm,uploadViewer, uploadZip
     dependsOn uploadWindowsNet
     if (buildAndroid){
         dependsOn uploadAndroidBeta
@@ -783,7 +848,7 @@ task uploadRelease{
     doLast {
         println "###upload release artifacts to version dir $project.avnavVersion###"
     }
-    dependsOn testGit,uploadDeb,uploadRaspi,uploadRpm,uploadViewerRelease,uploadZip
+    dependsOn testGit,uploadDeb,uploadRpm,uploadViewerRelease,uploadZip
     dependsOn uploadWindowsNet
     if (buildAndroid){
         dependsOn uploadAndroidRelease

@@ -23,15 +23,10 @@
  ###############################################################################
  */
 import React from 'react';
-import {LoadItemDialog} from "./LoadSaveDialogs";
 import PropertyHandler from "../util/propertyhandler";
 import RequestHandler from "../util/requests";
-import OverlayDialog from "./OverlayDialog";
-
-
-const doLoad=(settings,selected)=>{
-
-}
+import {showPromiseDialog} from "./OverlayDialog";
+import {ConfirmDialog, SelectDialog} from "./BasicDialogs";
 /**
  * will return a promise that reolves to the loaded settings
  * or rejects with undefined of abort - or an error string
@@ -40,7 +35,7 @@ const doLoad=(settings,selected)=>{
  * @param opt_title
  * @param opt_preventDialog
  */
-const loadSettings = (currentValues, defaultName, opt_title, opt_preventDialog) => {
+export const loadSettings = (currentValues, defaultName, opt_title, opt_preventDialog) => {
     const setSettings = (checkedValues) => {
         return PropertyHandler.importSettings(checkedValues, currentValues, true);
     }
@@ -52,25 +47,23 @@ const loadSettings = (currentValues, defaultName, opt_title, opt_preventDialog) 
             let displayList=[];
             let prefSettings=undefined;
             settingslist.forEach((s)=>{
+                let selected=false;
                 if (s.name === defaultName){
                     prefSettings=s.name;
+                    selected=true;
                 }
-                displayList.push({label:s.name,value:s.name});
+                displayList.push({label:s.name,value:s.name,selected:selected});
             })
             if (! prefSettings || ! opt_preventDialog) {
-                return LoadItemDialog.createDialog(
-                    defaultName,
-                    displayList,
-                    {
-                        title: opt_title ? opt_title : 'Select Settings to load',
-                        itemLabel: 'Settings'
-                    }
-                )
+                return showPromiseDialog(undefined,(dprops)=><SelectDialog
+                    {...dprops}
+                    title={opt_title ? opt_title : 'Select Settings to load'}
+                    list={displayList}
+                />)
+                    .then((res)=>res.value)
             }
             else{
-                return new Promise((resolve,reject)=>{
-                    resolve(prefSettings);
-                })
+                return Promise.resolve(prefSettings);
             }
         })
         .then(
@@ -79,7 +72,8 @@ const loadSettings = (currentValues, defaultName, opt_title, opt_preventDialog) 
                     if (s.name === selected) selectedEntry=s;
                 })
                 return RequestHandler.getJson({
-                        request: 'download',
+                        request:'api',
+                        command: 'download',
                         type: 'settings',
                         noattach: true,
                         name: selected
@@ -94,8 +88,8 @@ const loadSettings = (currentValues, defaultName, opt_title, opt_preventDialog) 
         .then(
             (settings) => {
                 let replacements;
-                if (selectedEntry && selectedEntry.scopePrefix){
-                    replacements={prefix:selectedEntry.scopePrefix};
+                if (selectedEntry && selectedEntry.scope){
+                    replacements={prefix:selectedEntry.scope};
                 }
                 return PropertyHandler.verifySettingsData(settings, false, false,replacements)
             },
@@ -103,7 +97,7 @@ const loadSettings = (currentValues, defaultName, opt_title, opt_preventDialog) 
         )
         .then((result) => {
             if (result.warnings && result.warnings.length) {
-                return OverlayDialog.confirm(result.warnings.join('\n'), undefined, 'Import anyway?')
+                return showPromiseDialog(undefined,(dprops)=><ConfirmDialog {...dprops} text={result.warnings.join('\n')} title={'Import anyway?'}/>)
                     .then(
                         () => setSettings(result.data),
                         () => Promise.reject()

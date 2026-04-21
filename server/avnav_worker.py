@@ -53,7 +53,7 @@ class WorkerParameter(object):
   VALUE_TYPES=[T_STRING,T_NUMBER,T_BOOLEAN,T_FLOAT]
   RANGE_TYPES=[T_NUMBER,T_FLOAT]
   PREDEFINED_DESCRIPTIONS={
-    T_FILTER: ', separated list of sentences either !AIVDM or $RMC - for $ we ignore the 1st 2 characters'
+    T_FILTER: ', separated list of sentences either !AIVDM or $RMC - for $ we ignore the 1st 2 characters.\nUse a ^before each sentence to blacklist it'
   }
 
   def __init__(self,name,
@@ -83,7 +83,7 @@ class WorkerParameter(object):
         raise ParamValueError("invalid valuetype %s"%self.valuetype)
     else:
       self.valuetype=self.type if self.type != self.T_FILTER else self.T_STRING
-
+    self.existingUnchecked=False #allow to keep existing values in the UI
   def _getValue(self,val):
     if self.valuetype == self.T_NUMBER:
       return int(val)
@@ -115,6 +115,7 @@ class WorkerParameter(object):
                            mandatory=self.mandatory,
                            condition=self.condition,
                            valuetype=self.valuetype)
+    rt.existingUnchecked=self.existingUnchecked
     if resolveList:
       if callable(self.rangeOrList):
         rt.rangeOrList=self.rangeOrList()
@@ -454,7 +455,8 @@ class AVNWorker(InfoHandler):
     return rt
   @classmethod
   def resetHandlerList(cls):
-    cls.allHandlers=[]
+      with cls.handlerListLock:
+        cls.allHandlers=[]
 
   def findFeeder(self,feedername=None):
     if feedername is None:
@@ -487,7 +489,7 @@ class AVNWorker(InfoHandler):
     return None
 
   @classmethod
-  def getAllHandlers(cls,disabled=False):
+  def getAllHandlers(cls,disabled=False) -> 'list[AVNWorker]':
     """get the list of all instantiated handlers
     :param disabled if set to true also return disabled handler
     """
@@ -598,16 +600,21 @@ class AVNWorker(InfoHandler):
     except:
       return {'name':self.getStatusName(),'items':[],'error':"no info available"}
   def setInfo(self,name,info,status,childId=None,canDelete=False,timeout=None):
+    logInfo=None
+    rt=False
     with  self.__statusLock:
       existing=self.status.get(name)
       if existing:
         if existing.update(status,info,timeout=timeout):
-          AVNLog.info("%s",str(existing))
-          return True
+          logInfo=str(existing)
+          rt=True
       else:
         ns=WorkerStatus(name,status,info,childId=childId,canDelete=canDelete,timeout=timeout)
         self.status[name]=ns
-        AVNLog.info("%s",str(ns))
+        logInfo=str(ns)
+    if logInfo is not None:
+      AVNLog.info("%s",logInfo)
+    return rt
   def refreshInfo(self,name,timeout=None):
     with self.__statusLock:
       existing=self.status.get(name)
@@ -1104,28 +1111,43 @@ class AVNWorker(InfoHandler):
   def freeAllUsedResources(self):
     self.usedResources=[]
 
-  def getHandledCommands(self):
+  def getApiType(self):
     """get the API commands that will be handled by this instance
        the return must either be a single string or a dict
        of the form {'api':'route','download':'route','upload':'route','list':'route'}
     """
     return None
 
-  def handleApiRequest(self,type,command,requestparam,**kwargs):
+  def getHandledPath(self):
+      return None
+  def getWebsocketPrefix(self):
+      return None
+  def handlePathRequest(self, path, requestparam,server=None,handler=None):
+      raise Exception(f"no path mapping for {path} in {self.getConfigName()}")
+  def handleApiRequest(self, command, requestparam, handler=None, **kwargs):
     """
-    handle an http request , handling/parameter/return depend on type
-    raise an exception on error
-    :param type:
-           api - return a json with the response
-           download: return a dict with: mimetype,size,stream
-           upload: -- (exception on error)
-           list: dict with {status:OK,items:[]}, items: list of dict{name:xxx,time:xxx}
-    :param command: the (sub)command
-    :param requestparam: the HTTP request parameter
-    :param kwargs: on upload: rfile,flen
-    :return: json
-    """
-    raise Exception("handler for %s:%s not implemented in %s"%(type,command,self.getConfigName()))
+      handle an http request , handling/parameter/return depend on type
+      raise an exception on error
+      :param command: the (sub)command
+      :param requestparam: the HTTP request parameter
+      :param kwargs: on upload: rfile,flen
+      :return: json
+      """
+    raise Exception("handler for %s not implemented in %s"%(command,self.getConfigName()))
+
+  def handleWebSocketRequest(self, type, path, handler=None, **kwargs):
+    raise NotImplementedError(f"websocket not enabled for {type}")
+  @classmethod
+  def apiCondition(cls,value,type,command):
+      '''
+      handle api requests of old and new type
+      the value must be either equal to type or type must be 'api' and value must be equal to command
+      :param value: the value to check against
+      :param type: the old style type or 'api'
+      :param command: only used if type == 'api'
+      :return:
+      '''
+      return value==type or (type == 'api' and value==command)
     
   #we have 2 startup groups - one for the feeders and 2 for the rest
   #by default we start in groupd 2

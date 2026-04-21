@@ -29,13 +29,6 @@ import time
 from avndirectories import AVNUserHandler
 from commandhandler import AVNCommandHandler
 
-hasGpio=False
-try:
-  import RPi.GPIO as GPIO
-  hasGpio=True
-except:
-  pass
-
 from avnav_manager import AVNHandlerManager
 from avnav_util import *
 from avnav_worker import *
@@ -78,9 +71,6 @@ class AVNAlarmHandler(AVNWorker):
   P_CRITICALSOUND=WorkerParameter('criticalSound',type=WorkerParameter.T_SELECT,default='anchorAlarm.mp3',
                               description='sound to be played for critical Alarms (only if no explicit config)',
                               rangeOrList=[])
-  P_STOPALARMPIN=WorkerParameter('stopAlarmPin',type=WorkerParameter.T_NUMBER,
-                                 description='a gpio pin (board numbering!) to switch off alarms when it goes low',
-                                 mandatory=False)
   P_DEFAULTCOMMAND=WorkerParameter('defaultCommand',type=WorkerParameter.T_SELECT,
                                    default='sound',
                                    description='a command that is configured at AVNCommandhandler',
@@ -162,8 +152,6 @@ class AVNAlarmHandler(AVNWorker):
           cls.P_CRITICALSOUND.copy(rangeOrList=cls.listAlarmSounds),
           cls.P_DEFAULTCOMMAND.copy(rangeOrList=cls.listCommands),
           cls.P_DEFAULTPARAM]
-      if hasGpio:
-        rt.append(cls.P_STOPALARMPIN)
       return rt
     if child == "Alarm":
       return {
@@ -187,23 +175,12 @@ class AVNAlarmHandler(AVNWorker):
   def canEdit(cls):
     return True
 
-  def _gpioCmd(self,channel):
-    self.stopAll()
   def run(self):
     self.commandHandler=self.findHandlerByName(AVNCommandHandler.getConfigName())
     if self.commandHandler is None:
       self.setInfo('main',"no command handler found",WorkerStatus.ERROR)
       return
     self.setInfo('main',"running",WorkerStatus.NMEA)
-    gpioPin=self.P_STOPALARMPIN.fromDict(self.param)
-    if gpioPin is not None and gpioPin != 0:
-      if not hasGpio:
-        AVNLog.error("gpio pin for stopAlarm defined but no GPIO support found")
-      else:
-        GPIO.setmode(GPIO.BOARD)
-        GPIO.setup(gpioPin,GPIO.IN,pull_up_down=GPIO.PUD_UP)
-        GPIO.add_event_detect(gpioPin,GPIO.FALLING,callback=self._gpioCmd,bouncetime=100)
-        AVNLog.info("set gpio pin %d as reset alarm",gpioPin)
     while not self.shouldStop():
       self.wait(0.5)
       deletes=[]
@@ -474,23 +451,22 @@ class AVNAlarmHandler(AVNWorker):
         return fn
 
 
-  def getHandledCommands(self):
-    return {"api":"alarm","download":"alarm"}
+  def getApiType(self):
+    return "alarm"
 
-  def handleApiRequest(self,type,command,requestparam,**kwargs):
+  def handleApiRequest(self, command, requestparam, handler=None, **kwargs):
     '''
-    handle the URL based requests
-    :param type: api
-    :param command: alarm
-    :param requestparam: url parameters
-    :param kwargs:
-    :return: the answer
-    status=name,name,|all returns a hash {name:{name:alarmName,running:true}
-    start=name returns {status:ok|error}
-    stop=name,name {status: ok|err}
-    media=name {command:thecommand,repeat:therepeat,url:mediaUrl}
-    '''
-    if type == "download":
+      handle the URL based requests
+      :param command: alarm
+      :param requestparam: url parameters
+      :param kwargs:
+      :return: the answer
+      status=name,name,|all returns a hash {name:{name:alarmName,running:true}
+      start=name returns {status:ok|error}
+      stop=name,name {status: ok|err}
+      media=name {command:thecommand,repeat:therepeat,url:mediaUrl}
+      '''
+    if command =="download":
       name = AVNUtil.getHttpRequestParam(requestparam, "name",mantadory=True)
       AVNLog.debug("download alarm %s",name)
       running=None
@@ -507,16 +483,7 @@ class AVNAlarmHandler(AVNWorker):
       file=self.getSoundFile(alarmInfo.sound)
       if file is None:
         return None
-      fh=open(file,"rb")
-      if fh is None:
-        AVNLog.error("unable to find alarm sound %s",file)
-        return None
-      fsize=os.path.getsize(file)
-      rt={}
-      rt['mimetype'] = "audio/mpeg"
-      rt['size']=fsize
-      rt['stream']=fh
-      return rt
+      return AVNFileDownload(file, mimeType="audio/mpeg")
     status=AVNUtil.getHttpRequestParam(requestparam,"status")
     if status is not None:
       status=status.split(',')
@@ -534,20 +501,20 @@ class AVNAlarmHandler(AVNWorker):
                   }
       return {"status":"OK","data":rt}
     mode="start"
-    command=AVNUtil.getHttpRequestParam(requestparam,"start")
-    if command is None:
-      command = AVNUtil.getHttpRequestParam(requestparam, "stop")
+    alarm=AVNUtil.getHttpRequestParam(requestparam,"start")
+    if alarm is None:
+      alarm = AVNUtil.getHttpRequestParam(requestparam, "stop")
       mode="stop"
-      if command is None:
+      if alarm is None:
         rt={'info':"missing request parameter start or stop",'status':'error'}
         return rt
     rt={'status':'ok'}
     if mode == "start":
       category=AVNUtil.getHttpRequestParam(requestparam,'defaultCategory')
-      if not self.startAlarm(command,defaultCategory=category):
+      if not self.startAlarm(alarm,defaultCategory=category):
         rt['status']='error'
       return rt
-    if not self.stopAlarm(command):
+    if not self.stopAlarm(alarm):
       rt['status'] = 'error'
     return rt
 

@@ -4,15 +4,14 @@
 
 import Toast from '../components/Toast.jsx';
 import globalStore from './globalstore.jsx';
-import keys, {KeyHelper, PropertyType, SplitProperty} from './keys.jsx';
-import base from '../base.js';
+import keys, {KeyHelper, PropertyType} from './keys.jsx';
+import base from '../base.ts';
 import assign from 'object-assign';
-import LayoutHandler from './layouthandler';
+import LayoutHandler, {layoutLoader} from './layouthandler';
 import RequestHandler from "./requests";
 import Requests from "./requests";
 import LocalStorage, {STORAGE_NAMES} from './localStorageManager';
 import splitsupport from "./splitsupport";
-import {object} from "prop-types";
 
 
 const hex2rgba= (hex, opacity)=> {
@@ -36,7 +35,6 @@ const hex2rgba= (hex, opacity)=> {
  */
 class PropertyHandler {
     constructor(propertyDescriptions) {
-        let self=this;
         this.propertyPrefix=KeyHelper.keyNodeToString(keys.properties)+".";
         this.propertyDescriptions = KeyHelper.getKeyDescriptions(true);
         this.getProperties=this.getProperties.bind(this);
@@ -49,7 +47,7 @@ class PropertyHandler {
         this.prefixKeys=[];
         for (let k in this.propertyDescriptions){
             let description=this.propertyDescriptions[k];
-            if (description instanceof SplitProperty){
+            if (description.isSplit()){
                 this.prefixKeys.push(k);
             }
         }
@@ -183,12 +181,13 @@ class PropertyHandler {
 
     getAisColor(currentObject) {
         let color = "";
-        if (currentObject.warning) {
+        if ((currentObject.warning && globalStore.getData(keys.properties.aisMarkAllWarning))||
+            currentObject.nextWarning) {
             color = this.getColor('aisWarningColor');
         } else {
             if (currentObject.nearest) {
                 color = this.getColor('aisNearestColor');
-            } else if (currentObject.tracking) {
+            } else if (currentObject.mmsi === globalStore.getData(keys.nav.ais.trackedMmsi)) {
                 color = this.getColor('aisTrackingColor');
             } else {
                 color = this.getColor('aisNormalColor');
@@ -198,15 +197,12 @@ class PropertyHandler {
     }
 
 
-    resetToSaved(){
-        let self=this;
-        let defaults=KeyHelper.getDefaultKeyValues();
-        globalStore.storeMultiple(defaults,undefined,true);
+    _getSavedValues(){
+        let values=KeyHelper.getDefaultKeyValues();
         try {
             let ndata = this.loadUserData();
             let prefixData = this.loadUserData(true);
             if (ndata) {
-                let userData={};
                 for (let k in this.propertyDescriptions){
                     let v=KeyHelper.getValue(ndata,k,1);
                     if (this.prefixKeys.indexOf(k) >= 0){
@@ -214,15 +210,18 @@ class PropertyHandler {
                         if (pv !== undefined) v=pv;
                     }
                     if ( v === undefined) continue;
-                    if (v !== globalStore.getData(k)){
-                        userData[k]=v;
-                    }
+                    values[k]=v;
                 }
-                globalStore.storeMultiple(userData, undefined, true, true);
             }
         }catch (e){
             base.log("Exception reading user data "+e);
         }
+        return values;
+    }
+
+    resetToSaved(){
+        const saved=this._getSavedValues()
+        globalStore.storeMultiple(saved,undefined,true);
         globalStore.storeData(keys.gui.global.propertiesLoaded,true);
     }
 
@@ -364,7 +363,7 @@ class PropertyHandler {
                         break;
                     case PropertyType.LAYOUT:
                         promises.push(
-                            LayoutHandler.loadLayout(v,true)
+                            layoutLoader.loadLayout(v)
                                 .then((o) => {
                                         let rt = {};
                                         rt[dk] = v;
@@ -380,6 +379,12 @@ class PropertyHandler {
                                         }
                                     })
                         );
+                        break;
+                    case PropertyType.DELETED:
+                        warnings.push(dk+" is not used any more");
+                        break;
+                    case PropertyType.STRING:
+                        rt[dk]=v;
                         break;
                     default:
                         if (eHandler(dk+": cannot be set",true)) return;
@@ -417,7 +422,8 @@ class PropertyHandler {
                 data=JSON.stringify(data,undefined,2);
             }
             return Requests.postPlain({
-                request:'upload',
+                request:'api',
+                command:'upload',
                 type:'settings',
                 name: fileName,
                 overwrite: !!opt_overwrite
@@ -508,8 +514,9 @@ class PropertyHandler {
 
             }
             if (newLayout){
-                LayoutHandler.loadLayout(newLayout)
-                    .then((ok)=>{
+                layoutLoader.loadLayout(newLayout)
+                    .then((layout)=>{
+                        LayoutHandler.setLayoutAndName(layout,newLayout);
                         resolve(values);
                     })
                     .catch((e)=>reject("unable to load layout: "+e));
@@ -521,18 +528,16 @@ class PropertyHandler {
         });
     }
 
-    listSettings(opt_forSelect){
+    listSettings(){
         if ( !globalStore.getData(keys.gui.capabilities.uploadSettings,false)){
             return Promise.resolve([]);
         }
         return RequestHandler.getJson({
-            request: 'listdir',
+            request:'api',
+            command: 'list',
             type: 'settings'
         }).then((json)=>{
-            if (!opt_forSelect) return json.items;
-            let rt=[];
-            json.items.forEach((item)=>rt.push({label:item.name,value:item.name}));
-            return rt;
+            return json.items;
         });
     }
 

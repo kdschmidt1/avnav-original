@@ -1,7 +1,10 @@
 package de.wellenvogel.avnav.util;
 
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.location.Location;
 import android.net.ConnectivityManager;
@@ -21,17 +24,24 @@ import java.net.InetAddress;
 import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
+import java.net.URLEncoder;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
+import java.util.Date;
 import java.util.Enumeration;
 import java.util.HashMap;
-import java.util.List;
 import java.util.TimeZone;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import de.wellenvogel.avnav.main.Constants;
+import de.wellenvogel.avnav.main.R;
+
+import static android.content.Context.RECEIVER_EXPORTED;
+import static android.content.Context.RECEIVER_NOT_EXPORTED;
 
 /**
  * Created by andreas on 26.11.15.
@@ -39,6 +49,7 @@ import de.wellenvogel.avnav.main.Constants;
 public class AvnUtil {
     public static final double NM=1852.0;
     public static final double msToKn=3600.0/NM;
+    public static Pattern NMEA_START=Pattern.compile("[!$]");
 
     public static long getLongPref(SharedPreferences prefs, String key, long defaultValue){
         try{
@@ -112,22 +123,61 @@ public class AvnUtil {
         if (input == null) return input;
         return input.replaceAll("[^\\x20-\\x7F]", "");
     }
+    public static String stripLeading(String line){
+        if (line == null || line.isEmpty()) return line;
+        if (line.charAt(0) != '!' && line.charAt(0) != '$') {
+            Matcher m = NMEA_START.matcher(line);
+            if (m.find()) {
+                line = line.substring(m.start());
+            }
+        }
+        return line;
+    }
+
+    public static class WorkDir extends AvnWorkDir{
+        public WorkDir(boolean withTitles) {
+            super(withTitles);
+        }
+
+        @Override
+        String getConfigBase(boolean ext) {
+            return ext?Constants.EXTERNAL_WORKDIR:Constants.INTERNAL_WORKDIR;
+        }
+
+        @Override
+        String getShortName(String configName,Context ctx) {
+            if (configName.equals(Constants.INTERNAL_WORKDIR)){
+                return ctx.getResources().getString(R.string.internalStorage);
+            }
+            if (configName.equals(Constants.EXTERNAL_WORKDIR)){
+                return ctx.getResources().getString(R.string.externalStorage);
+            }
+            String sfx=configName.substring(Constants.EXTERNAL_WORKDIR.length());
+            if (sfx.isEmpty()) return configName;
+            return ctx.getResources().getString(R.string.externalStorage)+"-"+sfx;
+        }
+
+        @Override
+        String[] getDefaultDirs() {
+            return new String[]{"charts","tracks","routes","user"};
+        }
+    }
 
     public static File workdirStringToFile(String wd, Context context){
-        if (wd.equals(Constants.INTERNAL_WORKDIR)){
-            return context.getFilesDir();
-        }
-        if (wd.equals(Constants.EXTERNAL_WORKDIR)){
-            return context.getExternalFilesDir(null);
-        }
-        return new File(wd);
+        WorkDir parser=new WorkDir(false);
+        return parser.getFileForConfig(context,wd);
     }
     public static File getWorkDir(SharedPreferences pref, Context context){
         if (pref == null){
             pref=getSharedPreferences(context);
         }
         String wd=pref.getString(Constants.WORKDIR,"");
-        return workdirStringToFile(wd,context);
+        File rt=workdirStringToFile(wd,context);
+        if (rt == null){
+            AvnLog.e("unable to find requested workdir "+wd);
+            return context.getFilesDir();
+        }
+        return rt;
     }
 
     public static SharedPreferences getSharedPreferences(Context ctx){
@@ -158,8 +208,8 @@ public class AvnUtil {
         return rt;
     }
 
-    public static long toTimeStamp(net.sf.marineapi.nmea.util.Date date, net.sf.marineapi.nmea.util.Time time){
-        if (date == null) return 0;
+    public static Date toTimeStamp(net.sf.marineapi.nmea.util.Date date, net.sf.marineapi.nmea.util.Time time){
+        if (date == null) return null;
         Calendar cal=Calendar.getInstance(TimeZone.getTimeZone("UTC"));
         cal.set(Calendar.YEAR, date.getYear());
         cal.set(Calendar.MONTH, date.getMonth()-1); //!!! the java calendar counts from 0
@@ -169,8 +219,7 @@ public class AvnUtil {
         cal.set(Calendar.SECOND, 0);
         cal.set(Calendar.MILLISECOND, 0);
         cal.add(Calendar.MILLISECOND, (int) (time.getMilliseconds()));
-        long millis=cal.getTime().getTime();
-        return millis;
+        return cal.getTime();
     }
 
     public static InetAddress getLocalHost() throws UnknownHostException {
@@ -264,7 +313,7 @@ public class AvnUtil {
         float d13=start.distanceTo(current);
         float w13=start.bearingTo(current);
         float w12=start.bearingTo(end);
-        double rt=Math.asin(Math.sin(d13/R)*Math.sin(Math.toRadians(w13)-Math.toRadians(w12)))*R;
+        double rt=Math.asin(Math.sin(d13/ ERADIUS)*Math.sin(Math.toRadians(w13)-Math.toRadians(w12)))* ERADIUS;
         return rt;
     }
 
@@ -282,7 +331,7 @@ public class AvnUtil {
         }
         return rhumbLineXTE(start,end,current);
     }
-    public static final double R=6371000; //app. earth radius
+    public static final double ERADIUS =6371000; //app. earth radius
 
     public static double rhumbLineDistance(Location start, Location end){
         double lat1 = start.getLatitude();
@@ -309,7 +358,7 @@ public class AvnUtil {
 
         //distance is pythagoras on 'stretched' Mercator projection, √(Δφ² + q²·Δλ²)
         double d = Math.sqrt(dlatr * dlatr + q * q * dlonr * dlonr);  // angular distance in radians
-        d = d * R;
+        d = d * ERADIUS;
         return d;
     }
 
@@ -383,6 +432,13 @@ public class AvnUtil {
             this.value=v;
         }
     }
+    public static class ItemMap<VT> extends HashMap<String, AvnUtil.KeyValue<VT>>{
+        public ItemMap(AvnUtil.KeyValue<VT>...list){
+            for (AvnUtil.KeyValue<VT> i : list){
+                put(i.key,i);
+            }
+        }
+    }
 
     public static int buildPiFlags(int flags, boolean immutable){
         int rt=flags;
@@ -391,4 +447,46 @@ public class AvnUtil {
         }
         return rt;
     }
+    public static Intent registerUnexportedReceiver(Context ctx, BroadcastReceiver receiver, IntentFilter filter){
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            return ctx.registerReceiver(receiver,filter, RECEIVER_NOT_EXPORTED);
+        }
+        else{
+            return ctx.registerReceiver(receiver,filter);
+        }
+    }
+    public static Intent registerExportedReceiver(Context ctx, BroadcastReceiver receiver, IntentFilter filter){
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            return ctx.registerReceiver(receiver,filter, RECEIVER_EXPORTED);
+        }
+        else{
+            return ctx.registerReceiver(receiver,filter);
+        }
+    }
+    public static boolean deleteRecursive(File fileOrFolder) {
+        boolean result = true;
+        if(fileOrFolder.isDirectory()) {
+            for (File file : fileOrFolder.listFiles()) {
+                result = result && deleteRecursive(file);
+            }
+        }
+        result = result && fileOrFolder.delete();
+        return result;
+    }
+
+    public static String encodeUrlPath(String path) throws UnsupportedEncodingException {
+        String [] segments=path.split("/");
+        StringBuilder res=new StringBuilder();
+        boolean first=true;
+        for (String segment:segments){
+            String encoded= URLEncoder.encode(segment,"UTF-8").replace("+","%20");
+            if (first) {
+                first=false;
+                res.append(encoded);
+            }
+            else res.append('/').append(encoded);
+        }
+        return res.toString();
+    }
+
 }

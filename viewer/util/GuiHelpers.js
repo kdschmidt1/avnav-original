@@ -1,14 +1,12 @@
 import globalStore from '../util/globalstore.jsx';
-import keys from '../util/keys.jsx';
 import KeyHandler from './keyhandler.js';
-import LayoutHandler from './layouthandler.js';
 import assign from 'object-assign';
 import shallowcompare from "./compare";
 import Requests from "./requests";
 import base from "../base";
-import {useEffect, useState} from "react";
-
-
+import {useEffect, useRef, useState} from "react";
+import cloneDeep from "clone-deep";
+import {IMAGES} from "./itemFunctions";
 
 
 const resizeElementFont=(el)=>{
@@ -123,6 +121,21 @@ const storeHelper=(thisref,dataCanged,storeKeys,opt_callImmediate)=>{
         dataCanged(globalStore.getMultiple(storeKeys));
     }
 };
+
+export const useStoreHelper=(callback,storeKeys,callImmediate,beforeRender)=>{
+    const setter=useRef();
+    if (beforeRender){
+        useState(()=>setter.current=globalStore.register(callback,storeKeys));
+    }
+    useEffect(() => {
+        if (! beforeRender){
+            setter.current=globalStore.register(callback,storeKeys);
+        }
+        return ()=>globalStore.deregister(setter.current);
+
+    }, []);
+    if (callImmediate) callback();
+}
 
 /**
  * get some data from the global store into our state
@@ -246,6 +259,68 @@ const lifecycleTimer=(thisref,timercallback,interval,opt_autostart)=>{
         }
     };
 };
+/**
+ *
+ * @param timercallback
+ * @param interval
+ * @param [opt_autostart]
+ * @returns {{guardedCall: ((function(*, *): (boolean))|*), setTimeout: *, startTimer: (function(*): boolean), currentSequence: (function(): number), stopTimer: (function(*): boolean)}}
+ */
+export const useTimer=(timercallback,interval,opt_autostart)=>{
+    const timer=useRef(undefined);
+    const currentSequence=useRef(0);
+    const currentInterval=useRef(interval);
+    //we must wrap this into a ref to ensure that always the current callback
+    //with an up to date closure is called
+    const callbackHandler=useRef(timercallback);
+    const startTimer=(sequence)=>{
+        if (sequence !== undefined && sequence !== currentSequence.current) return false;
+        if (timer.current !== undefined){
+            currentSequence.current++;
+            window.clearTimeout(timer.current);
+        }
+        const startSequence=currentSequence.current;
+        timer.current=window.setTimeout(()=>{
+            if (currentSequence.current !== startSequence) return;
+            timer.current=undefined;
+            callbackHandler.current(startSequence);
+        },currentInterval.current);
+        return true;
+    }
+    const stopTimer=(sequence)=>{
+        if (sequence !== undefined && sequence !== currentSequence.current) return false;
+        if (timer.current !== undefined){
+            currentSequence.current++;
+            window.clearTimeout(timer.current);
+            timer.current=undefined;
+        }
+    }
+    useEffect(() => {
+        callbackHandler.current=timercallback;
+    }, [timercallback]);
+    useEffect(() => {
+        if (opt_autostart){
+            startTimer(0); //only start the timer if this is really an initial call
+        }
+        return ()=>{
+            stopTimer();
+        }
+    }, []);
+    return {
+        startTimer:(sequence)=>startTimer(sequence),
+        stopTimer:(sequence)=>stopTimer(sequence),
+        setTimeout:(newInterval,opt_stop)=>{
+            if (opt_stop) stopTimer();
+            currentInterval.current=newInterval;
+        },
+        currentSequence:()=>currentSequence.current,
+        guardedCall:(sequence,callback)=>{
+            if (sequence !== undefined && sequence !== currentSequence.current) return false;
+            callback(currentSequence.current);
+            return true;
+        }
+    }
+}
 
 const keyEventHandler=(thisref,callback,component,action)=>{
     const handler=(cbComponent,cbAction)=>{
@@ -314,8 +389,6 @@ const scrollInContainer=(parent, element)=> {
     return 0;
 };
 
-const IMAGES=['png','jpg','svg','bmp','tiff','gif'];
-
 /**
  * helper for maintaining an object inside a components state
  * it will add 2 fields to the state:
@@ -338,7 +411,7 @@ export const stateHelper=(thisref,initialValues,opt_namePrefix)=>{
         changedName=opt_namePrefix+changedName;
     }
     if (! thisref.state) thisref.state={};
-    thisref.state[valueName]=assign({},initialValues);
+    thisref.state[valueName]= assign({},initialValues);
     thisref.state[changedName]=false;
     let rt={
         setValue:(key,value)=>{
@@ -348,6 +421,15 @@ export const stateHelper=(thisref,initialValues,opt_namePrefix)=>{
             let newState={};
             newState[valueName]=values;
             newState[changedName]=!shallowcompare(values,initialValues);
+            thisref.setState(newState);
+        },
+        deleteValue:(key)=>{
+            if (! (key in thisref.state[valueName])) return;
+            let values=assign({},thisref.state[valueName]);
+            delete values[key];
+            let newState={};
+            newState[valueName]=values;
+            newState[changedName]=true;
             thisref.setState(newState);
         },
         setState:(partialState,opt_overwrite)=>{
@@ -365,8 +447,11 @@ export const stateHelper=(thisref,initialValues,opt_namePrefix)=>{
         isItemChanged(name){
             return ! shallowcompare(rt.getValue(name),initialValues[name]);
         },
-        reset(){
+        reset(opt_newInitial){
             let newState={};
+            if (opt_newInitial){
+                initialValues={...opt_newInitial}
+            }
             newState[valueName]=assign({},initialValues);
             newState[changedName]=false;
             thisref.setState(newState);
@@ -392,52 +477,67 @@ export const stateHelper=(thisref,initialValues,opt_namePrefix)=>{
 
 };
 /**
- * migration support for legacy code
- * with useState the state helper is not really necessary any more - but to migrate old code this method could be helpful
+ * replacement for stateHelper
  * @param initialValues
- * @returns {*|{}|{getValue(*, *): *, getState(*): *, getValues(*): (any), isChanged(): boolean, setValue: *, setState: *, reset(): void, isItemChanged(*): *}|boolean}
+ * @param opt_deepCopy use deep copy
  */
-export const useStateHelper=(initialValues)=>{
-    const [values,setValues]=useState(initialValues);
-    const [isChanged,setChanged]=useState(false);
+export const useStateObject=(initialValues,opt_deepCopy)=>{
+    const copy=opt_deepCopy?(v)=>cloneDeep(v):(v)=>{return {...v}};
+    let innerInitial=copy(initialValues||{});
+    const [current,setCurrent]=useState(innerInitial);
+    const ref=useRef(current);
+    ref.current=current;
     return {
         setValue:(key,value)=>{
-            if (values[key] === value) return;
-            let nv={};
-            nv[key]=value;
-            let nvalues={...values,nv};
-            nvalues[key]=value;
-            setValues(nvalues);
-            setChanged(true);
+            if (ref.current[key]==value) return;
+            let values=copy(ref.current);
+            values[key]=value;
+            setCurrent(values);
+        },
+        deleteValue:(key)=>{
+            if (! (key in ref.current)) return;
+            let values=copy(ref.current);
+            delete values[key];
+            setCurrent(values);
         },
         setState:(partialState,opt_overwrite)=>{
-            let nvalues=opt_overwrite?partialState:{...values,...partialState};
-            setChanged(!shallowcompare(values,initialValues));
-            setValues(nvalues);
+            let values;
+            if (! opt_overwrite) {
+                if (opt_deepCopy){
+                    values=copy(ref.current);
+                    Object.assign(values,partialState);
+                }
+                else{
+                    values={...ref.current,...partialState};
+                }
+            }
+            else values=partialState||{};
+            setCurrent(values);
         },
         isChanged(){
-            return isChanged;
+            return !shallowcompare(ref.current,innerInitial);
         },
         isItemChanged(name){
-            return ! shallowcompare(values[name],initialValues[name]);
+            return ! shallowcompare(ref.current[name],initialValues[name]);
         },
-        reset(){
-            setValues(initialValues);
-            setChanged(false);
-        },
-        getValues(opt_copy){
-            if (opt_copy){
-                return {...values};
+        reset(opt_newInitial){
+            if (opt_newInitial){
+                innerInitial=copy(opt_newInitial)
             }
-            return values;
+            setCurrent(innerInitial);
         },
         getState(opt_copy){
-            return opt_copy?{...values}:values;
+            if (opt_copy){
+                return copy(ref.current);
+            }
+            return ref.current;
         },
         getValue(key,opt_default){
-            let rt=values[key];
-            if (rt !== undefined) return rt;
-            return opt_default;
+            let v=ref.current[key];
+            if (v === undefined && opt_default !== undefined){
+                v=opt_default;
+            }
+            return v;
         }
     }
 }
@@ -446,7 +546,7 @@ const getServerCommand=(name)=>{
     return Requests.getJson({
         request:'api',
         type:'command',
-        action:'getCommands'
+        command:'list'
     })
         .then((data)=> {
             if (!data.data) return;
@@ -457,6 +557,18 @@ const getServerCommand=(name)=>{
             }
         })
         .catch((e)=>base.log("unable to query server command "+name));
+}
+/**
+ * helper for the react callback issue
+ * you can use the stateRef in callbacks to obtain the current value of the state
+ * @param initial
+ * @return {[unknown,(value: unknown) => void,React.MutableRefObject<unknown>]}
+ */
+export const useStateRef=(initial)=>{
+    const [state,setState]=useState(initial);
+    const stateRef=useRef(initial);
+    stateRef.current=state;
+    return [state,setState,stateRef];
 }
 
 export default {
@@ -471,5 +583,6 @@ export default {
     storeHelper,
     storeHelperState,
     stateHelper,
-    getServerCommand
+    getServerCommand,
+    useStateRef
 };

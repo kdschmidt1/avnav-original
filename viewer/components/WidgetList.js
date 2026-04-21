@@ -7,7 +7,7 @@ import AisTargetWidget from './AisTargetWidget.jsx';
 import ActiveRouteWidget from './ActiveRouteWidget.jsx';
 import EditRouteWidget from './EditRouteWidget.jsx';
 import CenterDisplayWidget from './CenterDisplayWidget.jsx';
-import WindWidget, {getWindData} from './WindWidget';
+import WindWidget, {getWindData, WindStoreKeys} from './WindWidget';
 import XteWidget from './XteWidget';
 import EmptyWidget from './EmptyWidget';
 import WindGraphics from './WindGraphics';
@@ -19,18 +19,20 @@ import DateTimeWidget from './DateTimeWidget.jsx';
 import {GaugeRadial} from './CanvasGauges.jsx';
 import UndefinedWidget from './UndefinedWidget.jsx';
 import {SKPitchWidget, SKRollWidget} from "./SKWidgets";
-import assign from 'object-assign';
 import {CombinedWidget} from "./CombinedWidget";
-
+import Formatter from "../util/formatter";
+import {DepthBelowKeel, DepthBelowTransducer, DepthBelowWater} from "./DepthWidgetFlex";
 let widgetList=[
     {
         name: 'SOG',
-        default: "0.0",
-        unit: "kn",
+        default: "---",
         caption: 'SOG',
         storeKeys: {
             value: keys.nav.gps.speed,
             isAverage: keys.nav.gps.speedAverageOn
+        },
+        editableParameters: {
+            unit:false
         },
         formatter:'formatSpeed'
     },
@@ -43,9 +45,9 @@ let widgetList=[
             value: keys.nav.gps.course,
             isAverage:keys.nav.gps.courseAverageOn
         },
-        formatter: 'formatDirection',
+        formatter: 'formatDirection360',
         editableParameters: {
-            formatterParameters: false
+            formatterParameters: true
         }
 
     },
@@ -57,9 +59,9 @@ let widgetList=[
         storeKeys:{
             value: keys.nav.gps.headingMag
         },
-        formatter: 'formatDirection',
+        formatter: 'formatDirection360',
         editableParameters: {
-            formatterParameters: false
+            formatterParameters: true
         }
     },
     {
@@ -70,9 +72,9 @@ let widgetList=[
         storeKeys:{
             value: keys.nav.gps.headingTrue
         },
-        formatter: 'formatDirection',
+        formatter: 'formatDirection360',
         editableParameters: {
-            formatterParameters: false
+            formatterParameters: true
         }
     },
     {
@@ -100,13 +102,22 @@ let widgetList=[
     },
     {
         name: 'DST',
-        default: "----",
-        unit: "nm",
+        default: "---",
         caption: 'DST',
         storeKeys:{
-            value: keys.nav.wp.distance
+            value: keys.nav.wp.distance,
+            server: keys.nav.wp.server
         },
-        formatter: 'formatDistance'
+        updateFunction: (state)=>{
+            return {
+                value: state.value,
+                disconnect: state.server === false
+            }
+        },
+        formatter: 'formatDistance',
+        editableParameters: {
+            unit: false
+        }
 
     },
     {
@@ -117,29 +128,33 @@ let widgetList=[
         storeKeys:{
             value: keys.nav.wp.course
         },
-        formatter: 'formatDirection',
+        formatter: 'formatDirection360',
         editableParameters: {
-            formatterParameters: false
+            formatterParameters: true
         }
     },
     {
         name: 'VMG',
-        default: "0.0",
-        unit: "kn",
+        default: "---",
         caption: 'VMG',
         storeKeys: {
             value: keys.nav.wp.vmg
+        },
+        editableParameters: {
+            unit:false
         },
         formatter:'formatSpeed'
 
     },
     {
         name: 'STW',
-        default: '0.0',
-        unit: 'kn',
+        default: '---',
         caption: 'STW',
         storeKeys:{
             value: keys.nav.gps.waterSpeed
+        },
+        editableParameters: {
+            unit:false
         },
         formatter: 'formatSpeed'
     },
@@ -148,17 +163,16 @@ let widgetList=[
         default: "---",
         unit: "\u00b0",
         caption: 'Wind Angle',
-        storeKeys:{
-            windAngle:keys.nav.gps.windAngle,
-            windDirectionTrue: keys.nav.gps.trueWindDirection,
-            windAngleTrue: keys.nav.gps.trueWindAngle
-        },
-        formatter: 'formatDirection',
+        storeKeys:WindStoreKeys,
+        formatter: 'formatString',
         editableParameters: {
             formatterParameters: false,
+            formatter: false,
             value: false,
             caption: false,
-            kind: {type:'SELECT',list:['auto','trueAngle','trueDirection','apparent'],default:'auto'}
+            kind: {type:'SELECT',list:['auto','trueAngle','trueDirection','apparent'],default:'auto'},
+            show360: {type:'BOOLEAN',default: false,description:'always show 360°'},
+            leadingZero:{type:'BOOLEAN',default: false,description:'show leading zeroes (012)'}
         },
         translateFunction: (props)=>{
             const captions={
@@ -166,25 +180,29 @@ let widgetList=[
                 TD: 'TWD',
                 TA: 'TWA'
             };
+            const formatter={
+                A: (v)=>Formatter.formatDirection(v,undefined,!props.show360,props.leadingZero),
+                TD: (v)=>Formatter.formatDirection(v,undefined,false,props.leadingZero),
+                TA:(v)=>Formatter.formatDirection(v,undefined,!props.show360,props.laedingZero),
+            }
             let wind=getWindData(props);
-            return {...props,value:wind.windAngle, caption:captions[wind.suffix] }
+            const fmt=formatter[wind.suffix];
+            let value;
+            if (!fmt) value=Formatter.formatDirection(wind.windAngle);
+            else value=fmt(wind.windAngle);
+            return {...props,value:value, caption:captions[wind.suffix] }
         }
     },
     {
         name: 'WindSpeed',
         default: "---",
-        unit: "m/s",
         caption: 'Wind Speed',
-        storeKeys:{
-            windSpeed:keys.nav.gps.windSpeed,
-            windSpeedTrue: keys.nav.gps.trueWindSpeed,
-            showKnots: keys.properties.windKnots
-        },
+        storeKeys:WindStoreKeys,
         formatter: 'formatSpeed',
         editableParameters: {
-            formatterParameters: false,
             value: false,
             caption: false,
+            unit: false,
             kind: {type:'SELECT',list:['auto','true','apparent'],default:'auto'}
         },
         translateFunction: (props)=>{
@@ -196,9 +214,7 @@ let widgetList=[
             let wind=getWindData(props);
             return {...props,
                 value:wind.windSpeed,
-                caption:captions[wind.suffix],
-                formatterParameters: props.showKnots?'k':'m',
-                unit: props.showKnots?'kn':'m/s'
+                caption:captions[wind.suffix]
             }
         }
     },
@@ -221,18 +237,20 @@ let widgetList=[
         storeKeys:{
             value:keys.nav.anchor.direction
         },
-        formatter: 'formatDirection',
+        formatter: 'formatDirection360',
         editableParameters: {
-            formatterParameters: false
+            formatterParameters: true
         }
     },
     {
         name: 'AnchorDistance',
         default: "---",
-        unit: "m",
         caption: 'ACHR-DST',
         storeKeys:{
             value:keys.nav.anchor.distance
+        },
+        editableParameters: {
+            unit:false
         },
         formatter: 'formatDistance',
         formatterParameters: ['m']
@@ -240,22 +258,26 @@ let widgetList=[
     {
         name: 'AnchorWatchDistance',
         default: "---",
-        unit: "m",
         caption: 'ACHR-WATCH',
         storeKeys:{
             value:keys.nav.anchor.watchDistance
         },
-        formatter: 'formatDecimal',
-        formatterParameters: [3,1],
+        editableParameters: {
+            unit:false
+        },
+        formatter: 'formatDistance',
+        formatterParameters: ['m'],
     },
 
     {
         name: 'RteDistance',
-        default: " ----- ",
-        unit: "nm",
+        default: "---",
         caption: 'RTE-Dst',
         storeKeys:{
             value:keys.nav.route.remain
+        },
+        editableParameters: {
+            unit:false
         },
         formatter: 'formatDistance'
     },
@@ -274,8 +296,7 @@ let widgetList=[
         default: "--:--",
         caption: 'Time',
         storeKeys:{
-            value:keys.nav.gps.rtime,
-            visible: keys.properties.showClock
+            value:keys.nav.gps.rtime
         },
         formatter: 'formatClock'
     },
@@ -284,7 +305,15 @@ let widgetList=[
         default: "-------------",
         caption: 'MRK',
         storeKeys:{
-            value:keys.nav.wp.position
+            value:keys.nav.wp.position,
+            server: keys.nav.wp.server
+        },
+        updateFunction: (state)=>{
+            return {
+                value: state.value,
+                disconnect: state.server === false
+            }
+
         },
         formatter: 'formatLonLats'
     },
@@ -292,55 +321,60 @@ let widgetList=[
         name: 'Zoom',
         caption: 'Zoom',
         wclass: ZoomWidget,
-        storeKeys: ZoomWidget.storeKeys
     },
     {
         name: 'AisTarget',
         wclass: AisTargetWidget,
-        storeKeys: AisTargetWidget.storeKeys
     },
     {
         name: 'ActiveRoute',
         wclass: ActiveRouteWidget,
-        storeKeys: ActiveRouteWidget.storeKeys
     },
     {
         name: 'EditRoute',
         wclass: EditRouteWidget,
-        storeKeys: EditRouteWidget.storeKeys
     },
     {
         name: 'CenterDisplay',
-        caption: 'Center',
-        wclass: CenterDisplayWidget,
-        storeKeys: CenterDisplayWidget.storeKeys
+        wclass: CenterDisplayWidget
     },
     {
         name: 'WindDisplay',
-        caption: 'Wind',
         wclass: WindWidget,
-        storeKeys: WindWidget.storeKeys
     },
     {
         name: 'DepthDisplay',
+        default: "---",
         caption: 'DPT',
         unit: 'm',
         storeKeys:{
-            value:keys.nav.gps.depthBelowTransducer,
-            visible: keys.properties.showDepth
+            value:keys.nav.gps.depthBelowTransducer
         },
         formatter: 'formatDecimal',
-        formatterParameters: [3,1,true]
+        formatterParameters: [3,1,true],
+        editableParameters: {
+            maxValue: {type:'NUMBER',default:12000,description:'consider any value above this (in meters) as invalid'}
+        }
+    },
+    {
+      name: 'DepthBelowTransducer',
+      wclass: DepthBelowTransducer
+    },
+    {
+        name: 'DepthBelowKeel',
+        wclass: DepthBelowKeel
+    },
+    {
+        name: 'DepthBelowWater',
+        wclass: DepthBelowWater
     },
     {
         name: 'XteDisplay',
         wclass: XteWidget,
-        storeKeys: XteWidget.storeKeys
     },
     {
         name: 'WindGraphics',
-        wclass: WindGraphics,
-        storeKeys: WindGraphics.storeKeys
+        wclass: WindGraphics
     },
     {
         name: "DateTime",
@@ -355,13 +389,15 @@ let widgetList=[
         wclass: CombinedWidget,
         caption: '',
         children: [{name:'RteDistance'},{name:'RteEta'}],
+        locked:true,
         editableParameters:{
             formatter: false,
             unit: false,
             formatterParameters: false,
             value: false,
             caption: false,
-            children: false
+            children: false,
+            locked: false
         }
     },
     {
@@ -371,15 +407,14 @@ let widgetList=[
     {
         name: 'Alarm',
         wclass:AlarmWidget,
-        storeKeys: AlarmWidget.storeKeys
     },
     {
         name: 'RoutePoints',
         wclass: RoutePointsWidget,
-        storeKeys: RoutePointsWidget.storeKeys
     },
     {
-        name: 'Default' //a way to access the default widget providing all parameters in the layout
+        name: 'Default', //a way to access the default widget providing all parameters in the layout
+        default: "---",
     },
     {
         name: 'RadialGauge',
@@ -395,11 +430,15 @@ let widgetList=[
     },
     {
         name: 'signalKPressureHpa',
-        unit: 'hPa',
-        formatter: 'skPressure'
+        default: "---",
+        formatter: 'skPressure',
+        editableParameters: {
+            unit:false
+        },
     },
     {
         name:'signalKCelsius',
+        default: "---",
         unit:'°',
         formatter: 'skTemperature'
     },

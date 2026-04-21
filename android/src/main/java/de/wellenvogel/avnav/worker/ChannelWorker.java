@@ -1,5 +1,7 @@
 package de.wellenvogel.avnav.worker;
 
+import android.os.Build;
+
 import org.json.JSONException;
 
 import java.io.IOException;
@@ -11,6 +13,7 @@ import java.net.UnknownHostException;
 import de.wellenvogel.avnav.mdns.MdnsWorker;
 import de.wellenvogel.avnav.mdns.Resolver;
 import de.wellenvogel.avnav.mdns.Target;
+import de.wellenvogel.avnav.util.AvnLog;
 import de.wellenvogel.avnav.util.AvnUtil;
 import de.wellenvogel.avnav.util.NmeaQueue;
 
@@ -62,13 +65,39 @@ public abstract class ChannelWorker extends Worker{
                     final Target.Resolved resolved =
                             new Target.Resolved(target);
                     MdnsWorker resolver = gpsService.getMdnsResolver();
-                    if (resolver == null) throw new IOException("no mdns resolver active");
-                    target.resolve(resolver, new Target.Callback() {
-                        @Override
-                        public void resolve(Target.ResolveTarget target) {
-                            resolved.resolve(target);
-                        }
-                    }, forceNew);
+                    boolean systemResolve=false;
+                    if (target instanceof Target.ServiceTarget && (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) ) {
+                        //for versions < O (26/Android 8) we cannot really receive MC (see constructor of Resolver) so we try the system resolution additionally
+                        //for newer versions we rely on our own resolver only to be sure to get really recent results
+                        Target.ServiceTarget st=(Target.ServiceTarget)target;
+                        systemResolve=gpsService.resolveService(
+                                st.name, st.type, new Target.Callback() {
+                                    @Override
+                                    public void resolve(Target.ResolveTarget target) {
+                                        resolved.resolve(target);
+                                    }
+
+                                    @Override
+                                    public void fail(Target.ResolveTarget target) {
+                                        AvnLog.e("System resolve failed for service "+st.name);
+                                    }
+                                }
+                        );
+                    }
+                    if (resolver == null && ! systemResolve) throw new IOException("no mdns resolver active");
+                    if (resolver != null) {
+                        target.resolve(resolver, new Target.Callback() {
+                            @Override
+                            public void resolve(Target.ResolveTarget target) {
+                                resolved.resolve(target);
+                            }
+
+                            @Override
+                            public void fail(Target.ResolveTarget target) {
+
+                            }
+                        }, forceNew);
+                    }
                     long start = System.currentTimeMillis();
                     while ((start + MAXWAIT) > System.currentTimeMillis() && !shouldStop(startSequence)) {
                         if (resolved.isResolved()) {

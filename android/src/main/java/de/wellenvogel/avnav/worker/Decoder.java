@@ -1,13 +1,18 @@
 package de.wellenvogel.avnav.worker;
 
+import static de.wellenvogel.avnav.main.Constants.TYPE_DECODER;
+
 import android.location.Location;
+import android.net.Uri;
 import android.os.SystemClock;
 import android.util.Log;
 
+import net.sf.marineapi.nmea.parser.DataNotAvailableException;
 import net.sf.marineapi.nmea.parser.SentenceFactory;
-import net.sf.marineapi.nmea.sentence.DBTSentence;
+import net.sf.marineapi.nmea.parser.SentenceParser;
 import net.sf.marineapi.nmea.sentence.DPTSentence;
 import net.sf.marineapi.nmea.sentence.DateSentence;
+import net.sf.marineapi.nmea.sentence.DepthSentence;
 import net.sf.marineapi.nmea.sentence.GGASentence;
 import net.sf.marineapi.nmea.sentence.GLLSentence;
 import net.sf.marineapi.nmea.sentence.GSASentence;
@@ -21,7 +26,6 @@ import net.sf.marineapi.nmea.sentence.MWVSentence;
 import net.sf.marineapi.nmea.sentence.PositionSentence;
 import net.sf.marineapi.nmea.sentence.RMCSentence;
 import net.sf.marineapi.nmea.sentence.Sentence;
-import net.sf.marineapi.nmea.sentence.SentenceValidator;
 import net.sf.marineapi.nmea.sentence.TalkerId;
 import net.sf.marineapi.nmea.sentence.TimeSentence;
 import net.sf.marineapi.nmea.sentence.VDRSentence;
@@ -32,6 +36,7 @@ import net.sf.marineapi.nmea.util.DataStatus;
 import net.sf.marineapi.nmea.util.Direction;
 import net.sf.marineapi.nmea.util.Measurement;
 import net.sf.marineapi.nmea.util.Position;
+import net.sf.marineapi.nmea.util.SatelliteInfo;
 import net.sf.marineapi.nmea.util.Units;
 
 import org.json.JSONArray;
@@ -40,16 +45,20 @@ import org.json.JSONObject;
 
 import java.io.IOException;
 import java.text.SimpleDateFormat;
-import java.util.Date;
+import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.TimeZone;
 
 import de.wellenvogel.avnav.aislib.messages.message.AisMessage;
 import de.wellenvogel.avnav.aislib.messages.sentence.Abk;
 import de.wellenvogel.avnav.aislib.packet.AisPacket;
 import de.wellenvogel.avnav.aislib.packet.AisPacketParser;
+import de.wellenvogel.avnav.appapi.ExtendedWebResourceResponse;
+import de.wellenvogel.avnav.appapi.INavRequestHandler;
+import de.wellenvogel.avnav.appapi.PostVars;
+import de.wellenvogel.avnav.appapi.RequestHandler;
 import de.wellenvogel.avnav.main.R;
 import de.wellenvogel.avnav.util.AvnLog;
 import de.wellenvogel.avnav.util.AvnUtil;
@@ -59,7 +68,7 @@ import de.wellenvogel.avnav.util.NmeaQueue;
 /**
  * Created by andreas on 25.12.14.
  */
-public class Decoder extends Worker {
+public class Decoder extends Worker  implements INavRequestHandler {
     private static final String K_SET = "currentSet";
     private static final String K_DFT = "currentDrift";
     private static final String K_HDGT = "headingTrue";
@@ -72,17 +81,22 @@ public class Decoder extends Worker {
     private static final String K_DEPTHK = "depthBelowKeel";
     private static final String K_VHWS = "waterSpeed";
     private static final String K_VWTT = "waterTemp";
+
+    public static final String K_LON ="lon";
+    public static final String K_LAT ="lat";
+    public static final String K_COURSE ="course";
+    public static final String K_SPEED="speed";
+    public static final String K_TIME ="time";
+
+    public static final String IK_TIME="_time";
+    public static final String IK_DATE="_date";
     public SimpleDateFormat dateFormat=new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSSZ");
     private long lastAisCleanup=0;
     private AisStore store=null;
-    private GSVStore currentGsvStore=null;
-    private Location location=null;
-    private int locationPriority=0;
-    private long lastPositionReceived=0;
+    private GSVStores gsvStores=new GSVStores();
     public static final String LOGPRFX="AvNav:Decoder";
     private NmeaQueue queue;
     private static final long AIS_CLEANUP_INTERVAL=60000;
-    private String lastPositionSource="";
     private String lastAisSource="";
 
     public static final EditableParameter.IntegerParameter POSITION_AGE= new
@@ -93,141 +107,387 @@ public class Decoder extends Worker {
             EditableParameter.IntegerParameter("aisAge", R.string.labelSettingsAisLifetime,1200);
     public static final EditableParameter.StringParameter OWN_MMSI= new
             EditableParameter.StringParameter("ownMMSI",R.string.labelSettingsOwnMMSI,"");
-    private SatStatus satStatus=null;
     private NmeaQueue.Fetcher fetcher;
 
     private void addParameters(){
         parameterDescriptions.addParams(OWN_MMSI,POSITION_AGE, NMEA_AGE,AIS_AGE, QUEUE_AGE_PARAMETER);
     }
-    static class AuxiliaryEntry{
-        public long timeout;
-        public JSONObject data=new JSONObject();
-        public int priority=0;
-        public AuxiliaryEntry(int priority){
-            this.priority=priority;
-        }
+
+    @Override
+    public ExtendedWebResourceResponse handleDownload(String name, Uri uri) throws Exception {
+        throw new InvalidCommandException("download not suppoerted for decoder");
     }
 
-
-    private final HashMap<String,AuxiliaryEntry> auxiliaryData=new HashMap<String,AuxiliaryEntry>();
-
-    private synchronized void addAuxiliaryData(String key, AuxiliaryEntry entry,long maxAge){
-        long now=SystemClock.uptimeMillis();
-        entry.timeout=now+maxAge;
-        AuxiliaryEntry current=auxiliaryData.get(key);
-        if (current != null){
-            //if not expired and higher prio - keep current
-            if (current.timeout > now
-                    && current.priority > entry.priority
-            ) return;
-        }
-        auxiliaryData.put(key,entry);
+    @Override
+    public boolean handleUpload(PostVars postData, String name, boolean ignoreExisting, boolean completeName) throws Exception {
+        throw new InvalidCommandException("upload not suppoerted for decoder");
     }
-    private synchronized void mergeAuxiliaryData(JSONObject json) throws JSONException {
-        long now=SystemClock.uptimeMillis();
-        //TODO: consider timestamp
-        for (AuxiliaryEntry e: auxiliaryData.values()){
-            if (e.timeout < now) continue;
-            Iterator<String> akeys=e.data.keys();
-            while (akeys.hasNext()){
-                String k=akeys.next();
-                if (json.has(k)) continue;
-                json.put(k,e.data.get(k));
+
+    @Override
+    public JSONArray handleList(Uri uri, RequestHandler.ServerInfo serverInfo) throws Exception {
+        throw new InvalidCommandException("list not suppoerted for decoder");
+    }
+
+    @Override
+    public JSONObject handleInfo(String name, Uri uri, RequestHandler.ServerInfo serverInfo) throws Exception {
+        return null;
+    }
+
+    @Override
+    public boolean handleDelete(String name, Uri uri) throws Exception {
+        throw new InvalidCommandException("delete not suppoerted for decoder");
+    }
+
+    @Override
+    public boolean handleRename(String oldName, String newName) throws Exception {
+        throw new Exception("not available");
+    }
+
+    /**
+     * get the status for NMEA and AIS
+     * @return
+     * nmea: { source: internal, status: green , info: 3 visible/2 used}
+     * ais: [ source: IP, status: yellow, info: connected to 10.222.9.1:34567}
+     * @throws JSONException
+     */
+    private JSONObject getNmeaStatus() throws JSONException {
+        JSONObject nmea = new JSONObject();
+        nmea.put("source", "unknown");
+        nmea.put("status", "red");
+        nmea.put("info", "disabled");
+        JSONObject ais = new JSONObject();
+        ais.put("source", "unknown");
+        ais.put("status", "red");
+        ais.put("info", "disabled");
+        SatStatus st = getSatStatus();
+        nmea.put("source", st.getSource());
+        if (st.hasValidPosition()) {
+            nmea.put("status", "green");
+            nmea.put("info", "sats: " + st.getNumSat() + " / " + st.getNumUsed());
+        } else {
+            if (st.isGpsEnabled()) {
+                nmea.put("info", "con, sats: " + st.getNumSat() + " / " + st.getNumUsed());
+                nmea.put("status", "yellow");
+            } else {
+                nmea.put("info", "disconnected");
+                nmea.put("status", "red");
             }
         }
+        ais.put("source", getLastAisSource());
+        int aisTargets = numAisData();
+        if (aisTargets > 0) {
+            ais.put("status", "green");
+            ais.put("info", aisTargets + " targets");
+        } else {
+            if (st.isGpsEnabled()) {
+                ais.put("info", "connected");
+                ais.put("status", "yellow");
+            } else {
+                ais.put("info", "disconnected");
+                ais.put("status", "red");
+            }
+        }
+        JSONObject rt = new JSONObject();
+        rt.put("nmea", nmea);
+        rt.put("ais", ais);
+        return rt;
+    }
+    @Override
+    public JSONObject handleApiRequest(String command, Uri uri, PostVars postData, RequestHandler.ServerInfo serverInfo) throws Exception {
+        if ("gps".equals(command)) {
+            JSONObject o = getGpsData();
+            gpsService.setUpdateInfo(o);
+            return o;
+        }
+        if ("gpsV2".equals(command)) {
+            JSONObject o = getGpsData();
+            gpsService.setUpdateInfo(o);
+            return RequestHandler.getReturn(new AvnUtil.KeyValue<JSONObject>("data", o));
+        }
+        if ("nmeaStatus".equals(command)) {
+            return RequestHandler.getReturn(new AvnUtil.KeyValue<JSONObject>("data", getNmeaStatus()));
+        }
+        if ("ais".equals(command)) {
+            ArrayList<Location> centers = new ArrayList<Location>();
+            String sdistance = uri.getQueryParameter("distance");
+            double lat = 0, lon = 0, distance = 0;
+            String[] suffixes = new String[]{"", "1"};
+            for (String sfx : suffixes) {
+                String slat = uri.getQueryParameter("lat" + sfx);
+                String slon = uri.getQueryParameter("lon" + sfx);
+                try {
+                    if (slat != null) lat = Double.parseDouble(slat);
+                    if (slon != null) lon = Double.parseDouble(slon);
+                    Location l = new Location((String) null);
+                    l.setLatitude(lat);
+                    l.setLongitude(lon);
+                    centers.add(l);
+                } catch (Exception e) {
+                }
+            }
+            try {
+                if (sdistance != null) distance = Double.parseDouble(sdistance);
+            } catch (Exception e) {
+            }
+            return RequestHandler.getReturn(new AvnUtil.KeyValue<JSONArray>("data", getAisData(centers, distance)));
+        }
+        throw new InvalidCommandException("command "+command+" not handled in decoder");
     }
 
-    static class GSVStore{
-        public static final int MAXGSV=20; //max number of gsv sentences without one that is the last
-        public static final int GSVAGE=60000; //max age of gsv data in ms
-        private int numGsv=0;
-        private int lastReceived=0;
-        private boolean isValid=false;
-        private long validDate=0;
-        private long lastReceivedTime=SystemClock.uptimeMillis();
-        private int sourcePriority=0;
-        private int numUsed=0;
-        private HashMap<Integer,GSVSentence> sentences=new HashMap<Integer,GSVSentence>();
+    @Override
+    public ExtendedWebResourceResponse handleDirectRequest(Uri uri, RequestHandler handler, String method, Map<String, String> headers) throws Exception {
+        return null;
+    }
 
-        public GSVStore(int priority){
-            sourcePriority=priority;
+    @Override
+    public String getPrefix() {
+        return null;
+    }
+
+    @Override
+    public String getType() {
+        return TYPE_DECODER;
+    }
+
+    private static class NmeaEntry {
+      public Object value;
+      public String key;
+      int priority;
+      long timeout;
+      String source;
+      public NmeaEntry(String k, Object v, NmeaQueue.Entry qe, long t){
+          priority=qe.priority;
+          source=qe.source;
+          key=k;
+          value=v;
+          timeout=t;
+      }
+      public NmeaEntry(String k){
+          key=k;
+          timeout=0;
+      }
+      void toJson(JSONObject o) throws JSONException {
+          o.put(key,value);
+      }
+      public boolean valid(long now){
+          return now <= timeout;
+      }
+      public boolean valid(){
+            return timeout >= SystemClock.uptimeMillis();
         }
-        public boolean setSourcePriority(int priority){
-            //we let the position set our priority
-            lastReceivedTime=SystemClock.uptimeMillis();
-            if (priority != sourcePriority){
-                numUsed=0;
-                lastReceived=0;
-                sentences.clear();
-                numGsv=0;
-                isValid=false;
-                sourcePriority=priority;
-                return true;
-            }
+    };
+    private static class NoJsonNmeaEntry extends NmeaEntry{
+        public NoJsonNmeaEntry(String k, Object v, NmeaQueue.Entry qe, long t){
+            super(k,v,qe,t);
+        }
+
+        @Override
+        void toJson(JSONObject o) throws JSONException {
+        }
+    }
+
+    private static class EmptyNmeaEntry extends NmeaEntry{
+        public EmptyNmeaEntry(String k){
+            super(k);
+        }
+
+        @Override
+        void toJson(JSONObject o) throws JSONException {
+        }
+
+        @Override
+        public boolean valid(long now) {
             return false;
         }
-        public void addSentence(GSVSentence gsv, int priority){
-            if (priority < sourcePriority){
-                if (! isOutDated()) return;
-            }
-            lastReceivedTime=SystemClock.uptimeMillis();
-            if (priority != sourcePriority){
-                sentences.clear();
-                isValid=false;
-                validDate=0;
-                numGsv=0;
-                sourcePriority=priority;
-                if (! gsv.isFirst()) return;
-            }
-            if (gsv.isFirst()){
-                numGsv=gsv.getSentenceCount();
-                sentences.clear();
-                isValid=false;
-                validDate=0;
-            }
-            if (sentences.size() >= (numGsv-1) && ! gsv.isLast()){
-                AvnLog.e("too many gsv sentences without last");
-                return;
-            }
-            lastReceived=gsv.getSentenceIndex();
-            sentences.put(gsv.getSentenceIndex(),gsv);
-            if (gsv.isLast()){
-                if (sentences.size() != numGsv){
-                    AvnLog.e("missing GSV sentence expected count="+numGsv+", has="+sentences.size());
-                }
-                isValid=true;
-                validDate=SystemClock.uptimeMillis();
-            }
-        }
-        public void setNumUsed(int num, int priority){
-            if (priority == sourcePriority){
-                numUsed=num;
-            }
-        }
-        public boolean getValid(){
-            if (! isValid) return false;
-            if (validDate == 0) return false;
-            long now=SystemClock.uptimeMillis();
-            if ((now-validDate) > GSVAGE) return false;
-            return true;
-        }
-        public int getSatCount(){
-            if (! isValid) return 0;
-            for (GSVSentence s: sentences.values()){
-                return s.getSatelliteCount();
-            }
-            return 0;
-        }
-        public int getNumUsed(){
-            if (! isValid) return 0;
-            return numUsed;
-        }
-        public boolean isOutDated(){
-            long now=SystemClock.uptimeMillis();
-            return ((now-lastReceivedTime) > GSVAGE);
+
+        @Override
+        public boolean valid() {
+            return false;
         }
     }
-    private net.sf.marineapi.nmea.util.Date lastDate;
+    private final HashMap<String, NmeaEntry> nmeaData =new HashMap<String, NmeaEntry>();
+
+    private synchronized List<NmeaEntry> getEntries(String...keys){
+        ArrayList<NmeaEntry> rt=new ArrayList<>();
+        for (String k:keys){
+            NmeaEntry next=nmeaData.get(k);
+            if (next == null) next=new EmptyNmeaEntry(k);
+            rt.add(next);
+        }
+        return rt;
+    }
+
+    private synchronized boolean addNmeaData(List<NmeaEntry>entries){
+        //only add the data if none of the items has an entry with higher prio
+        //this allows to ensure that e.g. a position always is provided by one
+        //source - even if it has multiple keys
+        long now=SystemClock.uptimeMillis();
+        for (NmeaEntry de : entries) {
+            if (de != null) {
+                NmeaEntry current = nmeaData.get(de.key);
+                if (current != null) {
+                    //if not expired and higher prio - keep current
+                    if (current.valid(now) && current.priority > de.priority) {
+                        return false;
+                    }
+                }
+            }
+        }
+        for (NmeaEntry de : entries) {
+            if (de != null) {
+                nmeaData.put(de.key, de);
+            }
+        }
+        return true;
+    }
+    private synchronized boolean addNmeaData(NmeaEntry de) {
+        if (de != null) {
+            NmeaEntry current = nmeaData.get(de.key);
+            if (current != null) {
+                //if not expired and higher prio - keep current
+                if (current.valid() && current.priority > de.priority) {
+                    return false;
+                }
+            }
+            nmeaData.put(de.key,de);
+            return true;
+        }
+        return false;
+    }
+    private synchronized boolean addNmeaData(String key, Object value, NmeaQueue.Entry qe, long maxAge){
+        NmeaEntry de=new NmeaEntry(key,value,qe,SystemClock.uptimeMillis()+maxAge);
+        return addNmeaData(de);
+    }
+    private synchronized void mergeNmeaData(JSONObject json) throws JSONException {
+        long now=SystemClock.uptimeMillis();
+        for (NmeaEntry e: nmeaData.values()){
+            if (!e.valid(now)) continue;
+            e.toJson(json);
+        }
+    }
+
+    static class GSVStore {
+        static class Sat {
+            public int number;
+            public String talker = "";
+            long lastSeen;
+
+            public Sat(int number, String talker) {
+                this.number = number;
+                this.talker = talker;
+                this.lastSeen = SystemClock.uptimeMillis();
+            }
+
+            boolean valid(long validTime) {
+                return this.lastSeen >= validTime;
+            }
+
+            void update(String talker) {
+                if (talker != null) {
+                    this.talker = talker;
+                }
+                this.lastSeen = SystemClock.uptimeMillis();
+            }
+
+        }
+
+        long expiryTime;
+        int priority;
+        String source;
+        private final HashMap<Integer, Sat> satellites = new HashMap<Integer, Sat>();
+        private final HashMap<Integer, Sat> used = new HashMap<Integer, Sat>();
+
+        public GSVStore(String source,long expiryTime,int priority) {
+            this.expiryTime = expiryTime;
+            this.priority=priority;
+            this.source=source;
+        }
+        synchronized void cleanup() {
+            cleanupUsed();
+            cleanupSats();
+        }
+
+        synchronized void cleanupSats() {
+            long validTime = SystemClock.uptimeMillis() - expiryTime;
+            satellites.entrySet().removeIf(integerSatEntry -> !integerSatEntry.getValue().valid(validTime));
+        }
+
+        synchronized void cleanupUsed() {
+            long validTime = SystemClock.uptimeMillis() - expiryTime;
+            used.entrySet().removeIf(integerSatEntry -> !integerSatEntry.getValue().valid(validTime));
+        }
+
+        synchronized int getSatCount() {
+            return satellites.size();
+        }
+
+        synchronized int getNumUsed() {
+            return used.size();
+        }
+
+        public synchronized void addSentence(GSVSentence gsv) {
+            for (SatelliteInfo info : gsv.getSatelliteInfo()) {
+                int id = Integer.parseInt(info.getId());
+                Sat existing = satellites.get(id);
+                if (existing == null) {
+                    existing = new Sat(id, gsv.getTalkerId().toString());
+                    satellites.put(id, existing);
+                }
+                existing.update(gsv.getTalkerId().toString());
+            }
+            cleanupSats();
+        }
+
+        public synchronized void addSentence(GSASentence gsa) {
+            for (String sid : gsa.getSatelliteIds()) {
+                int id = Integer.parseInt(sid);
+                Sat existing = used.get(id);
+                if (existing == null) {
+                    existing = new Sat(id, gsa.getTalkerId().toString());
+                    used.put(id, existing);
+                }
+                existing.update(gsa.getTalkerId().toString());
+            }
+            cleanupUsed();
+        }
+
+    }
+
+    static class GSVStores {
+        private final HashMap<String,GSVStore> stores=new HashMap<>();
+        public synchronized GSVStore getStore(String k,long expiry,int priority) {
+            GSVStore rt=stores.get(k);
+            if (rt == null) {
+                rt=new GSVStore(k,expiry,priority);
+                stores.put(k,rt);
+            }
+            rt.expiryTime=expiry;
+            rt.priority=priority;
+            return rt;
+        }
+        public synchronized GSVStore getStore(String k) {
+            return stores.get(k);
+        }
+        public synchronized GSVStore getHPStore() {
+            GSVStore found=null;
+            for (GSVStore s:stores.values()){
+                if (found == null || found.priority < s.priority){
+                    found=s;
+                }
+            }
+            return found;
+        }
+
+        public synchronized void cleanup(boolean force) {
+            if (force) {
+                stores.clear();
+                return;
+            }
+            for (GSVStore store : stores.values()){
+                store.cleanup();
+            }
+        }
+    }
     private double convertTransducerValue(String ttype, String tunit, double tval) {
         if("C".equals(tunit)){
             return tval+273.15;
@@ -282,11 +542,60 @@ public class Decoder extends Worker {
             }
         }
 
+        public static double to360(double angle){
+            angle=angle % 360;
+            while (angle < 0) angle+=360;
+            return angle;
+        }
+
+        public static final class EVTGParser extends net.sf.marineapi.nmea.parser.SentenceParser{
+            public EVTGParser(String nmea) {
+                super(nmea);
+            }
+
+            public EVTGParser(TalkerId talker) {
+                super(talker,"VTG",9);
+            }
+
+            double getCOG() {
+                return getDoubleValue(0);
+            }
+            double getSOG(){
+                if ("T".equals(getStringValue(1))){
+                    //new style
+                    return getDoubleValue(4);
+                }
+                return getDoubleValue(2);
+            }
+        }
+
+        public static class EDepthParser extends SentenceParser implements DepthSentence{
+
+            public EDepthParser(String nmea) {
+                super(nmea);
+            }
+            public EDepthParser(TalkerId id){
+                super(id,"DBx",1);
+            }
+
+            @Override
+            public double getDepth() {
+                return getDoubleValue(2);
+            }
+
+            @Override
+            public void setDepth(double depth) {
+
+            }
+        }
 
         @Override
         public void run(int startSequence) throws JSONException {
             store=new AisStore(OWN_MMSI.fromJson(parameters));
             SentenceFactory factory = SentenceFactory.getInstance();
+            factory.registerParser("VTG", EVTGParser.class);
+            factory.registerParser("DBK",EDepthParser.class);
+            factory.registerParser("DBS", EDepthParser.class);
             HashMap<String,AisPacketParser> aisparsers=new HashMap<>();
             Thread cleanupThread=new Thread(new Runnable() {
                 @Override
@@ -297,6 +606,16 @@ public class Decoder extends Worker {
                             cleanupAis(AIS_AGE.fromJson(parameters));
                         } catch (Throwable t) {
                             AvnLog.e("exception in AIS cleanup", t);
+                        }
+                        try{
+                            cleanupNmea();
+                        }catch(Throwable t){
+                            AvnLog.e("exception in NMEA cleanup",t);
+                        }
+                        try{
+                            gsvStores.cleanup(false);
+                        }catch(Throwable t){
+                            AvnLog.e("exception in cleanup gsv",t);
                         }
                         sleep(10000);
                         if (shouldStop(startSequence)) break;
@@ -324,6 +643,8 @@ public class Decoder extends Worker {
                     continue;
                 }
                 String line = entry.data;
+                long now=SystemClock.uptimeMillis();
+
                 try {
                     if (line.startsWith("$")) {
                         //NMEA
@@ -331,61 +652,49 @@ public class Decoder extends Worker {
                             try {
                                 line = correctTalker(line);
                                 Sentence s = factory.createParser(line);
-                                if (s instanceof DateSentence) {
-                                    lastDate = ((DateSentence) s).getDate();
-                                }
                                 if (s instanceof GSVSentence) {
-                                    if (currentGsvStore == null) currentGsvStore = new GSVStore(locationPriority);
+                                    GSVStore store=gsvStores.getStore(entry.source,posAge,entry.priority);
                                     GSVSentence gsv = (GSVSentence) s;
-                                    currentGsvStore.addSentence(gsv,entry.priority);
+                                    store.addSentence(gsv);
                                     AvnLog.dfs("%s: GSV sentence (%d/%d) numSat=%d" ,
                                             getTypeName() ,gsv.getSentenceIndex(),
                                             gsv.getSentenceCount(),gsv.getSatelliteCount());
-                                    if (currentGsvStore.getValid()) {
-                                        satStatus=new SatStatus(currentGsvStore.getSatCount(),currentGsvStore.getNumUsed(),fetcher.hasData());
-                                        currentGsvStore = new GSVStore(locationPriority);
-                                        AvnLog.dfs("%s: GSV sentence last, numSat=%d",getTypeName(),satStatus.numSat);
-                                    }
                                     continue;
                                 }
                                 if (s instanceof GSASentence) {
-                                    if (currentGsvStore != null) {
-                                        currentGsvStore.setNumUsed(((GSASentence) s).getSatelliteIds().length, entry.priority);
-                                        AvnLog.dfs("%s: GSA sentence, used=%d",
-                                                getTypeName(), currentGsvStore.getNumUsed());
-                                    }
+                                    GSVStore store=gsvStores.getStore(entry.source,posAge,entry.priority);
+                                    store.addSentence((GSASentence) s);
                                     continue;
                                 }
                                 if (s instanceof MWVSentence) {
                                     MWVSentence m = (MWVSentence) s;
-                                    AvnLog.d("%s: MWV sentence",getTypeName() );
-                                    AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
+                                    AvnLog.dfs("%s: MWV sentence",getTypeName() );
                                     WindKeys keys=new WindKeys(m.isTrue()?WindKeys.TRUEA:WindKeys.APP);
-                                    e.data.put(keys.angle, m.getAngle());
-                                    double speed = m.getSpeed();
-                                    if (m.getSpeedUnit().equals(Units.KMH)) {
-                                        speed = speed / 3.6;
-                                    }
-                                    if (m.getSpeedUnit().equals(Units.KNOT)) {
-                                        speed = knToMs(speed);
-                                    }
-                                    e.data.put(keys.speed, speed);
-                                    addAuxiliaryData(s.getSentenceId()+(m.isTrue()?"T":"A"), e,posAge);
+                                    try {
+                                        addNmeaData(keys.angle, m.getAngle(),entry,posAge);
+                                    }catch (DataNotAvailableException ignored){}
+                                    try {
+                                        double speed = m.getSpeed();
+                                        if (m.getSpeedUnit().equals(Units.KMH)) {
+                                            speed = speed / 3.6;
+                                        }
+                                        if (m.getSpeedUnit().equals(Units.KNOT)) {
+                                            speed = knToMs(speed);
+                                        }
+                                        addNmeaData(keys.speed, speed,entry,posAge);
+                                    }catch (DataNotAvailableException ignored){}
                                     continue;
                                 }
                                 if (s instanceof MWDSentence){
                                     MWDSentence m = (MWDSentence) s;
-                                    AvnLog.d("%s: MWD sentence",getTypeName() );
-                                    AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
+                                    AvnLog.dfs("%s: MWD sentence",getTypeName() );
                                     WindKeys keys=new WindKeys(WindKeys.TRUED);
-                                    boolean hasData=false;
                                     double direction=m.getTrueWindDirection();
                                     if (Double.isNaN(direction)){
                                         direction=m.getMagneticWindDirection();
                                     }
                                     if (! Double.isNaN(direction)){
-                                        hasData=true;
-                                        e.data.put(keys.angle,direction);
+                                        addNmeaData(keys.angle,direction,entry,posAge);
                                     }
                                     double speed=m.getWindSpeed();
                                     if (Double.isNaN(speed)){
@@ -395,66 +704,63 @@ public class Decoder extends Worker {
                                         }
                                     }
                                     if (! Double.isNaN(speed)){
-                                        hasData=true;
-                                        e.data.put(keys.speed,speed);
-                                    }
-                                    if (hasData){
-                                        addAuxiliaryData(s.getSentenceId(), e,posAge);
+                                        addNmeaData(keys.speed,speed,entry,posAge);
                                     }
                                     continue;
                                 }
                                 if (s instanceof VWRSentence){
                                     VWRSentence w=(VWRSentence)s;
-                                    AvnLog.d("%s: VWR sentence",getTypeName() );
-                                    AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
-                                    double wangle=w.getWindAngle();
-                                    Direction wdir=w.getDirectionLeftRight();
-                                    if (wdir == Direction.LEFT) wangle=360-wangle;
+                                    AvnLog.dfs("%s: VWR sentence",getTypeName() );
                                     WindKeys keys=new WindKeys(WindKeys.APP);
-                                    e.data.put(keys.angle,wangle);
+                                    try {
+                                        double wangle = w.getWindAngle();
+                                        Direction wdir = w.getDirectionLeftRight();
+                                        if (wdir == Direction.LEFT) wangle = 360 - wangle;
+                                        addNmeaData(keys.angle, wangle, entry, posAge);
+                                    }catch (DataNotAvailableException ignored){}
                                     try{
                                         double speed=w.getSpeedKnots();
-                                        e.data.put(keys.speed,knToMs(speed));
+                                        addNmeaData(keys.speed,knToMs(speed),entry,posAge);
                                     }catch (Throwable t){
                                         try{
                                             double speed=w.getSpeedKmh();
-                                            e.data.put(keys.speed,speed/3.6);
+                                            addNmeaData(keys.speed,speed/3.6,entry,posAge);
                                         }catch (Throwable x){}
                                     }
-                                    addAuxiliaryData(s.getSentenceId(), e,posAge);
                                     continue;
                                 }
                                 if (s instanceof DPTSentence) {
                                     DPTSentence d = (DPTSentence) s;
-                                    AvnLog.d("%s: DPT sentence",getTypeName() );
-                                    AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
-                                    double depth = d.getDepth();
-                                    e.data.put(K_DEPTHT, depth);
-                                    double offset = d.getOffset();
-                                    if (offset >= 0) {
-                                        e.data.put(K_DEPTHW, depth + offset);
-                                    } else {
-                                        e.data.put(K_DEPTHK, depth + offset);
-                                    }
-                                    addAuxiliaryData(s.getSentenceId(), e,posAge);
+                                    AvnLog.dfs("%s: DPT sentence",getTypeName() );
+                                    try {
+                                        double depth=d.getDepth();
+                                        addNmeaData(K_DEPTHT, depth, entry, posAge);
+                                        double offset = d.getOffset();
+                                        if (offset >= 0) {
+                                            addNmeaData(K_DEPTHW, depth + offset,entry,posAge);
+                                        } else {
+                                            addNmeaData(K_DEPTHK, depth + offset,entry,posAge);
+                                        }
+                                    } catch (DataNotAvailableException ignored){}
                                     continue;
                                 }
-                                if (s instanceof DBTSentence) {
-                                    DBTSentence d = (DBTSentence) s;
-                                    AvnLog.d("%s: DBT sentence",getTypeName() );
-                                    AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
+                                if (s instanceof DepthSentence) {
+                                    DepthSentence d = (DepthSentence) s;
+                                    AvnLog.dfs("%s: depth(%s) sentence",getTypeName(), s.getSentenceId() );
                                     double depth = d.getDepth();
-                                    e.data.put(K_DEPTHT, depth);
-                                    addAuxiliaryData(s.getSentenceId(), e,posAge);
+                                    String k=K_DEPTHT;
+                                    if ("DBK".equals(s.getSentenceId())) k=K_DEPTHK;
+                                    if ("DBS".equals(s.getSentenceId())) k=K_DEPTHW;
+                                    addNmeaData(k, depth,entry,posAge);
                                     continue;
                                 }
                                 if (s instanceof MTWSentence) {
                                     MTWSentence d = (MTWSentence) s;
-                                    AvnLog.d("%s: MTW sentence",getTypeName() );
-                                    AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
-                                    double waterTemp = d.getTemperature() + 273.15;
-                                    e.data.put(this.K_VWTT, waterTemp);
-                                    addAuxiliaryData(s.getSentenceId(), e,posAge);
+                                    AvnLog.dfs("%s: MTW sentence",getTypeName() );
+                                    try {
+                                        double waterTemp = d.getTemperature() + 273.15;
+                                        addNmeaData(K_VWTT, waterTemp, entry, posAge);
+                                    }catch (DataNotAvailableException ignored){}
                                     continue;
                                 }
                                 if (s instanceof XDRSentence) {
@@ -465,9 +771,7 @@ public class Decoder extends Worker {
                                         String tunit = transducer.getUnits();
                                         double tval = transducer.getValue();
                                         if (tname != null ) {
-                                            AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
-                                            e.data.put("transducers." + tname, convertTransducerValue(ttype, tunit, tval));
-                                            addAuxiliaryData(s.getSentenceId() + "." + tname, e,auxAge);
+                                            addNmeaData("transducers." + tname, convertTransducerValue(ttype, tunit, tval),entry,auxAge);
                                         }
                                     }
 
@@ -475,108 +779,104 @@ public class Decoder extends Worker {
                                 if (s instanceof HDMSentence ){
                                     HDMSentence sh=(HDMSentence)s;
                                     AvnLog.dfs("%s: HDM sentence",getTypeName() );
-                                    AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
-                                    e.data.put(K_HDGM,sh.getHeading());
-                                    addAuxiliaryData(s.getSentenceId(),e,posAge);
+                                    addNmeaData(K_HDGM,sh.getHeading(),entry,posAge);
                                     continue;
                                 }
                                 if (s instanceof HDTSentence ){
                                     HDTSentence sh=(HDTSentence)s;
                                     AvnLog.dfs("%s: %s sentence",getTypeName(),s.getSentenceId() );
-                                    AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
-                                    e.data.put(K_HDGT,sh.getHeading());
-                                    addAuxiliaryData(s.getSentenceId(),e,posAge);
+                                    addNmeaData(K_HDGT,sh.getHeading(),entry,posAge);
                                     continue;
                                 }
                                 if (s instanceof VDRSentence){
                                     VDRSentence vdr=(VDRSentence) s;
                                     AvnLog.dfs("%s: %s sentence",getTypeName(),s.getSentenceId() );
-                                    AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
                                     try{
                                         double strue=vdr.getTrueDirection();
-                                        e.data.put(K_SET,strue);
-                                    }catch (Exception v1){}
+                                        addNmeaData(K_SET,strue,entry,posAge);
+                                    }catch (DataNotAvailableException v1){}
                                     try{
                                         double drift=vdr.getSpeed();
-                                        e.data.put(K_DFT,drift);
-                                    }catch (Exception v2){}
-                                    if (e.data.length()>0){
-                                        addAuxiliaryData(s.getSentenceId(),e,posAge);
-                                    }
+                                        addNmeaData(K_DFT,drift,entry,posAge);
+                                    }catch (DataNotAvailableException v2){}
+                                    continue;
                                 }
                                 if (s instanceof VHWSentence){
                                     VHWSentence sv=(VHWSentence)s;
                                     AvnLog.dfs("%s: %s sentence",getTypeName(), s.getSentenceId());
-                                    AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
-                                    boolean hasData=false;
                                     try {
-                                        e.data.put(K_HDGM, sv.getMagneticHeading());
-                                        hasData=true;
-                                    }catch (Exception sv1){}
+                                        addNmeaData(K_HDGM, sv.getMagneticHeading(),entry,posAge);
+                                    }catch (DataNotAvailableException sv1){}
                                     try {
-                                        e.data.put(K_HDGT, sv.getHeading());
-                                        hasData=true;
-                                    }catch(Exception sv2){}
+                                        addNmeaData(K_HDGT, sv.getHeading(),entry,posAge);
+                                    }catch(DataNotAvailableException sv2){}
                                     try {
-                                        e.data.put(K_VHWS, knToMs(sv.getSpeedKnots()));
-                                        hasData=true;
-                                    }catch(Exception sv3){}
-                                    if (hasData) {
-                                        addAuxiliaryData(s.getSentenceId(), e, posAge);
-                                    }
-                                    else{
-                                        AvnLog.dfs("no data in %s",s.getSentenceId());
-                                    }
+                                        addNmeaData(K_VHWS, knToMs(sv.getSpeedKnots()),entry,posAge);
+                                    }catch(DataNotAvailableException sv3){}
                                     continue;
                                 }
                                 if (s instanceof HDGSentence){
                                     HDGSentence sh=(HDGSentence)s;
                                     AvnLog.dfs("%s: %s sentence",getTypeName(),s.getSentenceId() );
-                                    AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
                                     double heading=sh.getHeading();
-                                    e.data.put(K_HDGC,heading);
+                                    addNmeaData(K_HDGC,heading,entry,posAge);
                                     try{
                                         double mDev=sh.getDeviation();
-                                        e.data.put(K_MDEV,mDev);
+                                        addNmeaData(K_MDEV,mDev,entry,posAge);
                                         heading+=mDev;
-                                        e.data.put(K_HDGM, heading);
-                                    }catch (Exception he){}
+                                        addNmeaData(K_HDGM, to360(heading),entry,posAge);
+                                    }catch (DataNotAvailableException he){}
                                     try{
                                         double mVar=sh.getVariation();
-                                        e.data.put(K_MAGVAR,mVar);
+                                        addNmeaData(K_MAGVAR,mVar,entry,posAge);
                                         heading+=mVar;
-                                        e.data.put(K_HDGT,heading);
+                                        addNmeaData(K_HDGT,to360(heading),entry,posAge);
                                     }catch(Exception h2e){}
-                                    addAuxiliaryData(s.getSentenceId(),e,posAge);
                                     continue;
+                                }
+                                if (s instanceof EVTGParser){
+                                    EVTGParser vtg=(EVTGParser) s;
+                                    try{
+                                        addNmeaData(K_COURSE,vtg.getCOG(),entry,now+posAge);
+                                    }catch (DataNotAvailableException i){}
+                                    try{
+                                        addNmeaData(K_SPEED,vtg.getSOG()/ AvnUtil.msToKn,entry,posAge);
+                                    }catch (DataNotAvailableException i){}
                                 }
                                 Position p = null;
                                 if (s instanceof PositionSentence) {
                                     //we need to verify the position quality
                                     //it could be either RMC or GLL - they have DataStatus or GGA - GpsFixQuality
                                     boolean isValid = false;
-                                    if (s instanceof RMCSentence) {
-                                        RMCSentence rmc=(RMCSentence) s;
-                                        isValid = rmc.getStatus() == DataStatus.ACTIVE;
-                                        AvnLog.dfs("%s: RMC sentence, valid=%s",getTypeName() ,isValid);
-                                        if (isValid) {
-                                            try {
-                                                double mvar = rmc.getVariation();
-                                                AuxiliaryEntry e = new AuxiliaryEntry(entry.priority);
-                                                e.data.put(K_MAGVAR,mvar);
-                                                addAuxiliaryData(s.getSentenceId(),e,posAge);
-                                            }catch(Exception re){}
+                                    try {
+                                        if (s instanceof RMCSentence) {
+                                            RMCSentence rmc = (RMCSentence) s;
+                                            isValid = rmc.getStatus() == DataStatus.ACTIVE;
+                                            AvnLog.dfs("%s: RMC sentence, valid=%s", getTypeName(), isValid);
+                                            if (isValid) {
+                                                try {
+                                                    double mvar = rmc.getVariation();
+                                                    //the RMC parser inverts the variation if the direction is E
+                                                    //this seems to be wrong (and different to the python code)
+                                                    addNmeaData(K_MAGVAR, -mvar, entry, posAge);
+                                                } catch (DataNotAvailableException re) {
+                                                }
+                                            }
                                         }
-                                    }
-                                    if (s instanceof GLLSentence) {
-                                        isValid = ((GLLSentence) s).getStatus() == DataStatus.ACTIVE;
-                                        AvnLog.dfs("%s: GLL sentence, valid=%s",
-                                                getTypeName() , isValid);
-                                    }
-                                    if (s instanceof GGASentence) {
-                                        int qual = ((GGASentence) s).getFixQuality().toInt();
-                                        isValid = qual > 0;
-                                        AvnLog.dfs("%s: GGA sentence, quality=%d, valid=%s",getTypeName() ,qual,isValid);
+                                        if (s instanceof GLLSentence) {
+                                            isValid = ((GLLSentence) s).getStatus() == DataStatus.ACTIVE;
+                                            AvnLog.dfs("%s: GLL sentence, valid=%s",
+                                                    getTypeName(), isValid);
+                                        }
+                                        if (s instanceof GGASentence) {
+                                            GGASentence gga=(GGASentence) s;
+                                            try {
+                                                int qual = gga.getFixQuality().toInt();
+                                                isValid = qual > 0;
+                                                AvnLog.dfs("%s: GGA sentence, quality=%d, valid=%s", getTypeName(), qual, isValid);
+                                            }catch (DataNotAvailableException i){}
+                                        }
+                                    } catch (DataNotAvailableException ignored) {
                                     }
                                     if (isValid) {
                                         p = ((PositionSentence) s).getPosition();
@@ -584,69 +884,49 @@ public class Decoder extends Worker {
                                     }
                                 }
                                 net.sf.marineapi.nmea.util.Time time = null;
+                                net.sf.marineapi.nmea.util.Date date=null;
+                                if (s instanceof DateSentence) {
+                                    try {
+                                        date = ((DateSentence) s).getDate();
+                                        addNmeaData(new NoJsonNmeaEntry(IK_DATE,date,entry,now+posAge));
+                                    } catch (DataNotAvailableException ignored){}
+                                }
                                 if (s instanceof TimeSentence) {
                                     try {
                                         time = ((TimeSentence) s).getTime();
-                                    } catch (RuntimeException e) {
+                                        if (addNmeaData(new NoJsonNmeaEntry(IK_TIME,time,entry,now+posAge))) {
+                                            if (date == null) {
+                                                //check if we have a date received
+                                                synchronized (this){
+                                                    NmeaEntry e=nmeaData.get(IK_DATE);
+                                                    if (e!= null && e.valid()){
+                                                        date=(net.sf.marineapi.nmea.util.Date)e.value;
+                                                    }
+                                                }
+                                            }
+                                            if (date != null){
+                                                addNmeaData(K_TIME,dateFormat.format(AvnUtil.toTimeStamp(date,time)),entry,posAge);
+                                            }
+                                        }
+                                    } catch (DataNotAvailableException e) {
                                         AvnLog.d(LOGPRFX, "empty time in " + line);
                                     }
                                 }
-                                if (time != null && lastDate != null && p != null) {
-                                    synchronized (this) {
-                                        boolean setValues=false;
-                                        Location lastLocation=null;
-                                        if (entry.priority == locationPriority){
-                                            setValues=true;
-                                            lastLocation=location;
-                                        }
-                                        if (entry.priority > locationPriority){
-                                            locationPriority=entry.priority;
-                                            setValues=true;
-                                        }
-                                        if (entry.priority < locationPriority){
-                                            if (! locationValid()){
-                                                setValues=true;
-                                                locationPriority=entry.priority;
-                                            }
-                                        }
-                                        if (setValues) {
-                                            if (currentGsvStore != null) {
-                                                if (currentGsvStore.setSourcePriority(locationPriority)){
-                                                    satStatus=null;
-                                                };
-                                            }
-                                            lastPositionSource=entry.source;
-                                            Location newLocation = null;
-                                            if (lastLocation != null) {
-                                                newLocation = new Location(lastLocation);
-                                            } else {
-                                                newLocation = new Location((String) null);
-                                            }
-                                            lastPositionReceived = SystemClock.uptimeMillis();
-                                            newLocation.setLatitude(p.getLatitude());
-                                            newLocation.setLongitude(p.getLongitude());
-                                            newLocation.setTime(AvnUtil.toTimeStamp(lastDate, time));
-                                            location = newLocation;
-                                            if (s.getSentenceId().equals("RMC")) {
-                                                try {
-                                                    location.setSpeed((float) (((RMCSentence) s).getSpeed() / AvnUtil.msToKn));
-                                                } catch (Exception i) {
-                                                    AvnLog.dfs("%s: Exception querying speed: %s", getTypeName(), i.getLocalizedMessage());
-                                                }
-                                                try {
-                                                    location.setBearing((float) (((RMCSentence) s).getCourse()));
-                                                } catch (Exception i) {
-                                                    AvnLog.dfs("%s: Exception querying bearing: %s", getTypeName(), i.getLocalizedMessage());
-                                                }
-                                            }
-                                            AvnLog.d(LOGPRFX, getTypeName() + ": location: " + location);
-                                        }
-                                        else{
-                                            AvnLog.d(LOGPRFX,getTypeName()+": location ignored newPrio="+entry.priority+", existingPrio="+locationPriority);
-                                        }
+                                ArrayList<NmeaEntry> posEntries=new ArrayList<>();
+                                if (p != null){
+                                    long timeout=now+posAge;
+                                    posEntries.add(new NmeaEntry(K_LAT,p.getLatitude(),entry,timeout));
+                                    posEntries.add(new NmeaEntry(K_LON,p.getLongitude(),entry,timeout));
+                                    if (s instanceof RMCSentence) {
+                                        try {
+                                            double speed = ((RMCSentence) s).getSpeed() / AvnUtil.msToKn;
+                                            posEntries.add(new NmeaEntry(K_SPEED, speed, entry, timeout));
+                                        }catch (DataNotAvailableException i){}
+                                        try {
+                                            posEntries.add(new NmeaEntry(K_COURSE, ((RMCSentence) s).getCourse(), entry, timeout));
+                                        }catch(DataNotAvailableException i2){}
                                     }
-                                } else {
-                                    AvnLog.d(LOGPRFX, getTypeName() + ": ignoring sentence " + line + " - no position or time");
+                                    addNmeaData(posEntries);
                                 }
                             } catch (Exception i) {
                                 AvnLog.e(getTypeName() + ": exception in NMEA parser "+line ,i);
@@ -696,6 +976,10 @@ public class Decoder extends Worker {
             }
         }//satellite view
     }
+    public synchronized void cleanupNmea(){
+        long now=SystemClock.uptimeMillis();
+        nmeaData.entrySet().removeIf(e->!e.getValue().valid(now));
+    }
 
     Decoder(String name, GpsService ctx, NmeaQueue queue){
         super(name,ctx);
@@ -713,24 +997,44 @@ public class Decoder extends Worker {
     }
 
     @Override
-    public synchronized void setParameters(JSONObject newParam, boolean replace, boolean check) throws JSONException, IOException {
+    public synchronized void setParameters(String child, JSONObject newParam, boolean replace, boolean check) throws JSONException, IOException {
         if (replace){
             try{
-                super.setParameters(newParam,true,check);
+                super.setParameters(child, newParam,true,check);
             }catch (JSONException | IOException e){
                 AvnLog.e(getTypeName()+": config error",e);
                 //we fall back to save settings
-                super.setParameters(new JSONObject(),true,check);
+                super.setParameters(child, new JSONObject(),true,check);
             }
             return;
         }
-        super.setParameters(newParam, replace,check);
+        super.setParameters(child, newParam, replace,check);
     }
 
     SatStatus getSatStatus() {
-        SatStatus st=satStatus;
-        if (st == null) st=new SatStatus(0,0, fetcher.hasData());
-        return st;
+        List<NmeaEntry> pos=getEntries(K_LAT,K_LON);
+        String pSource=null;
+        boolean posValid=true;
+        for (NmeaEntry e:pos){
+            if (e.valid()) pSource=e.source;
+            else posValid=false;
+        }
+        GSVStore gsv=null;
+        if (pSource != null){
+            gsv=gsvStores.getStore(pSource);
+        }
+        else{
+            gsv=gsvStores.getHPStore();
+        }
+        SatStatus rt=null;
+        if (gsv != null){
+            gsv.cleanup();
+            rt=new SatStatus(gsv.getSatCount(),gsv.getNumUsed(),fetcher.hasData(),gsv.source,posValid);
+        }
+        else {
+            rt = new SatStatus(0, 0, fetcher.hasData(),pSource,posValid);
+        }
+        return rt;
     }
 
 
@@ -739,47 +1043,54 @@ public class Decoder extends Worker {
         super.stop();
         queue.clear();
     }
-
-    private boolean locationValid() throws JSONException {
-        long current=SystemClock.uptimeMillis();
-        if (current > (lastPositionReceived+POSITION_AGE.fromJson(parameters)*1000)){
-            return false;
+    private interface LocationSetter{
+        void op(Location l,NmeaEntry e);
+    }
+    private static class LocationEntry{
+        public boolean mandatory;
+        public LocationSetter setter;
+        public LocationEntry(boolean mandatory, LocationSetter setter) {
+            this.mandatory = mandatory;
+            this.setter = setter;
         }
-        return true;
+        public boolean mandatoryOk(NmeaEntry e,long now){
+            return ! mandatory || e.valid(now);
+        }
+        public void set(NmeaEntry e,long now, Location l){
+            if (! e.valid(now)) return;
+            setter.op(l,e);
+        }
     }
 
+    private static final Map<String,LocationEntry> locationEntries= new HashMap<String,LocationEntry>(){
+            {
+            put(K_LON,new LocationEntry(true,(l, e) -> l.setLongitude((double)e.value)));
+            put(K_LAT,new LocationEntry(true,(l, e) -> l.setLatitude((double)e.value)));
+            put(K_SPEED,new LocationEntry(false,(l, e) -> l.setSpeed((float)((double)e.value))));
+            put(K_COURSE,new LocationEntry(false,(l, e) -> l.setBearing((float)((double)e.value))));
+    }};
+    private static final String [] locationKeys=locationEntries.keySet().toArray(new String[0]);
     public Location getLocation() throws JSONException {
-        if (! locationValid()) return null;
-        Location rt=location;
-        if (rt == null) return rt;
-        rt=new Location(rt);
-        rt.setTime(rt.getTime()+TIMEOFFSET_PARAMETER.fromJson(parameters)*1000);
+        List<NmeaEntry> pos=getEntries(locationKeys);
+        long current=SystemClock.uptimeMillis();
+        Location rt=new Location((String)null);
+        for (NmeaEntry e:pos){
+            LocationEntry le=locationEntries.get(e.key);
+            if (le == null) return null; //internal error
+            if (!le.mandatoryOk(e,current)) return null;
+            le.set(e,current,rt);
+        }
         return rt;
     }
 
-    public static final String G_LON="lon";
-    public static final String G_LAT="lat";
-    public static final String G_COURSE="course";
-    public static final String G_SPEED="speed";
-    public static final String G_MODE="mode";
-    public static final String G_TIME="time";
     /**
      * service function to convert an android location
      * @return
      * @throws JSONException
      */
     JSONObject getGpsData() throws JSONException{
-        Location curLoc=getLocation();
         JSONObject rt=new JSONObject();
-        rt.put(G_MODE,1);
-        if (curLoc != null) {
-            rt.put(G_LAT, curLoc.getLatitude());
-            rt.put(G_LON, curLoc.getLongitude());
-            rt.put(G_COURSE, curLoc.getBearing());
-            rt.put(G_SPEED, curLoc.getSpeed());
-            rt.put(G_TIME, dateFormat.format(new Date(curLoc.getTime())));
-        }
-        mergeAuxiliaryData(rt);
+        mergeNmeaData(rt);
         AvnLog.d(LOGPRFX,"getGpsData: "+rt.toString());
         return rt;
     }
@@ -807,9 +1118,8 @@ public class Decoder extends Worker {
     public synchronized JSONObject getJsonStatus() throws JSONException {
         WorkerStatus workerStatus = new WorkerStatus(status);
         SatStatus st = getSatStatus();
-        Location loc = getLocation();
         int numAis = numAisData();
-        if (loc != null) {
+        if (st.hasValidPosition()) {
             String info = "valid position, sats: " + st.numSat + " / " + st.numUsed;
             workerStatus.setChildStatus("position", WorkerStatus.Status.NMEA, info);
         } else {
@@ -829,21 +1139,23 @@ public class Decoder extends Worker {
         private int numUsed=0;
         private boolean gpsEnabled; //for external connections this shows if it is connected
         private long createdTime;
+        private boolean validPosition;
+        private String source;
 
-        public SatStatus(int numSat,int numUsed, boolean gpsEnabled){
+        public SatStatus(int numSat,int numUsed, boolean gpsEnabled,String source,boolean valid){
             this.numSat=numSat;
             this.numUsed=numUsed;
             this.gpsEnabled=gpsEnabled;
             this.createdTime= SystemClock.uptimeMillis();
+            this.source=source;
+            this.validPosition=valid;
         }
 
         public int getNumSat() {
-            if (! isValid()) return 0;
             return numSat;
         }
 
         public int getNumUsed() {
-            if (! isValid()) return 0;
             return numUsed;
         }
 
@@ -851,26 +1163,24 @@ public class Decoder extends Worker {
             return gpsEnabled;
         }
 
-        public boolean isValid(){
-            return (SystemClock.uptimeMillis()-createdTime) < GSVStore.GSVAGE;
+        public boolean hasValidPosition(){
+            return validPosition;
         }
         public String toString(){
             return "Sat num="+numSat+", used="+numUsed;
+        }
+
+        public String getSource() {
+            return source;
         }
     }
 
     public synchronized void cleanup(){
         store.cleanup(-1); //cleanup all
-        locationPriority=0;
-        location=null;
-        lastPositionReceived=0;
-        auxiliaryData.clear();
-        satStatus=null;
+        gsvStores.cleanup(true);
+        nmeaData.clear();
     }
 
-    public String getLastPositionSource() {
-        return lastPositionSource;
-    }
 
     public String getLastAisSource() {
         return lastAisSource;

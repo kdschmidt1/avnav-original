@@ -1,5 +1,5 @@
 import NavData from '../nav/navdata.js';
-import MapHolder from '../map/mapholder.js';
+import MapHolder, {LOCK_MODES} from '../map/mapholder.js';
 import navobjects from '../nav/navobjects.js';
 import RouteEdit,{StateHelper} from '../nav/routeeditor.js';
 import globalStore from '../util/globalstore.jsx';
@@ -17,11 +17,11 @@ const controlMob=(start,history)=>{
         if (isActive) return;
         if (! globalStore.getData(keys.nav.gps.valid)) return;
         if (! globalStore.getData(keys.properties.connectedMode)) return;
-        if (LayoutHandler.isEditing()) LayoutHandler.loadStoredLayout();
+        LayoutHandler.resetEditing();
         let target=navobjects.WayPoint.fromPlain(globalStore.getData(keys.nav.gps.position));
         target.name=navobjects.WayPoint.MOB;
-        Router.wpOn(target,false);
-        MapHolder.setGpsLock(true);
+        Router.wpOn(target).then(()=>{},()=>{});
+        MapHolder.setGpsLock(LOCK_MODES.center);
         if (MapHolder.getCurrentChartEntry()){
             let currentZoom=MapHolder.getZoom();
             let mzoom=globalStore.getData(keys.properties.mobMinZoom);

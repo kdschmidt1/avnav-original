@@ -3,8 +3,8 @@
  * 2d context drawing functions
  * as all the ol3 stuff is hard to use or broken...
  */
-
-
+import {apply as olapply} from "ol/transform";
+import {add as oladd} from 'ol/coordinate';
 
 /**
  * an interface for converting between lat/lon and css pixel
@@ -83,6 +83,8 @@ export const Drawing=function(converter,opt_useHdpi){
      */
     this.useHdpi=opt_useHdpi||false;
 
+    this.pixelTransform=undefined;
+
 };
 
 Drawing.prototype.setUseHdpi=function(val){
@@ -134,12 +136,11 @@ Drawing.prototype.drawImageToContext=function(point,image,opt_options){
     if (! opt_options) opt_options={};
     if (image.naturalHeight == 0 || image.naturalWidth == 0) return; //silently ignore error
     let rt=this.pointToCssPixel(point);
-    let xy=this.pixelToDevice(rt);
     if (opt_options.fixX !== undefined) {
-        xy[0]=opt_options.fixX*this.devPixelRatio;
+        rt[0]=opt_options.fixX;
     }
     if (opt_options.fixY !== undefined) {
-        xy[1]=opt_options.fixY*this.devPixelRatio;
+        rt[1]=opt_options.fixY;
     }
     let devpixratio=this.devPixelRatio;
     let anchor=[0,0];
@@ -149,72 +150,43 @@ Drawing.prototype.drawImageToContext=function(point,image,opt_options){
     }
     let size;
     if (opt_options.size) {
-        size=opt_options.size;
+        size=opt_options.size.slice();
     }
     else {
         size=[image.naturalWidth,image.naturalHeight];
     }
     if (size[0]<=0 || size[1] <= 0) return;
+    size[0]=size[0]*devpixratio;
+    size[1]=size[1]*devpixratio;
     /** @type {CanvasRenderingContext2D} */
     let context=this.context;
+    let xy=this.pixelToDevice(rt);
     context.save();
     context.translate(xy[0],xy[1]);
     let angle=0;
     if (opt_options.rotation) {
         angle = opt_options.rotation;
     }
-    if (opt_options.rotateWithView) angle+=this.rotation;
+    if (!opt_options.rotateWithView) angle-=this.rotation;
     if (angle) context.rotate(angle);
     if (opt_options.background || opt_options.backgroundCircle){
         context.beginPath();
         if (opt_options.background) {
             context.fillStyle = opt_options.background;
-            context.rect(-anchor[0], -anchor[1], size[0] * devpixratio, size[1] * devpixratio);
+            context.rect(-anchor[0], -anchor[1], size[0], size[1]);
         }
         else {
             context.fillStyle = opt_options.backgroundCircle;
-            context.arc(0, 0,Math.max(size[0] * devpixratio, size[1] * devpixratio)/2,0,2*Math.PI);
+            context.arc(0, 0,Math.max(size[0] , size[1] )/2,0,2*Math.PI);
         }
-        let alpha=context.globalAlpha;
-        if (opt_options.backgroundAlpha){
-            context.globalAlpha=opt_options.backgroundAlpha;
-        }
+        this.setAlpha(opt_options,'backgroundAlpha');
         context.fill();
-        context.globalAlpha=alpha;
     }
-    let alpha;
-    if (opt_options.alpha !== undefined){
-        let alpha=context.globalAlpha;
-        context.globalAlpha=opt_options.alpha;
-    }
-    context.drawImage(image,-anchor[0],-anchor[1], size[0]*devpixratio, size[1]*devpixratio);
-    if (alpha !== undefined){
-        context.globalAlpha=alpha;
-    }
+    this.setAlpha(opt_options);
+    context.drawImage(image,-anchor[0],-anchor[1], size[0], size[1]);
     context.restore();
     return rt;
 };
-/**
- * draw a dashed line
- * coordinates have to be in device coordinates
- * @private
- * @param ax start x
- * @param ay start y
- * @param bx end x
- * @param by end y
- * @param dashLen the len in device pixel
- */
-Drawing.prototype.dashedLine = function(ax, ay, bx, by, dashlen) {
-    var dx = bx-ax, dy = by-ay;
-    var dashes = Math.max(Math.floor(Math.sqrt(dx * dx + dy * dy) / Math.max(1,dashlen)),3);
-    dashes += 1-dashes%2; // force odd number of dashes to draw visible dash at end
-    dx/=dashes; dy/=dashes;
-    for(var i=0;i<=dashes;i++) {
-        var x=ax+i*dx, y=ay+i*dy;
-        this.context[i % 2 ? 'lineTo' : 'moveTo'](x,y);
-    }
-};
-
 /**
  * draw an arrow with the current line style settings
  * x1,y1 being the peak (end of this line), x2,y2 the start, width - with at bottom
@@ -394,9 +366,8 @@ Drawing.prototype.drawTextToContext=function(point,text,opt_styles){
     let doStroke=false;
     let noRotate=true;
     let rt=this.pointToCssPixel(point);
-    let dp=this.pixelToDevice(rt);
     let offset=[0,0];
-    let alpha;
+    this.setAlpha(opt_styles);
     if (opt_styles) {
         if (opt_styles.fontBase) {
             let fontStyle=opt_styles.fontSize||10;
@@ -411,35 +382,29 @@ Drawing.prototype.drawTextToContext=function(point,text,opt_styles){
         if (opt_styles.width)this.context.lineWidth = this.useHdpi?opt_styles.width*this.devPixelRatio:opt_styles.width;
         if (opt_styles.rotateWithView) noRotate=false;
         if (opt_styles.fixX !== undefined) {
-            dp[0]=opt_styles.fixX*this.devPixelRatio;
+            rt[0]=opt_styles.fixX;
         }
         if (opt_styles.fixY !== undefined) {
-            dp[1]=opt_styles.fixY*this.devPixelRatio;
+            rt[1]=opt_styles.fixY
         }
         if (opt_styles.offsetX) offset[0]=opt_styles.offsetX;
         if (opt_styles.offsetY) offset[1]=opt_styles.offsetY;
-        if (opt_styles.alpha){
-            alpha=this.context.globalAlpha;
-            this.context.globalAlpha=opt_styles.alpha;
-        }
     }
-    offset=this.pixelToDevice(offset);
+    oladd(rt,offset);
+    const dp=this.pixelToDevice(rt);
     this.context.textAlign = opt_styles.align || 'center';
     this.context.textBaseline = opt_styles.baseline || 'middle';
     if (this.rotation && noRotate){
         this.context.save();
         this.context.translate(dp[0],dp[1]);
-        this.context.rotate(0);
-        if (doStroke) this.context.strokeText(text,offset[0],offset[1]);
-        if (doFill) this.context.fillText(text,offset[0],offset[1]);
+        this.context.rotate(-this.rotation);
+        if (doStroke) this.context.strokeText(text,0,0);
+        if (doFill) this.context.fillText(text,0,0);
         this.context.restore();
     }
     else {
-        if (doStroke) this.context.strokeText(text,dp[0]+offset[0],dp[1]+offset[1]);
-        if (doFill) this.context.fillText(text,dp[0]+offset[0],dp[1]+offset[1]);
-    }
-    if (alpha !== undefined){
-        this.context.globalAlpha=alpha;
+        if (doStroke) this.context.strokeText(text,dp[0],dp[1]);
+        if (doFill) this.context.fillText(text,dp[0],dp[1]);
     }
     return rt;
 };
@@ -484,6 +449,9 @@ Drawing.prototype.pointToCssPixel=function(coord) {
  * @returns {olCoordinate}
  */
 Drawing.prototype.pixelToDevice=function(pixel) {
+    if (this.pixelTransform){
+        return olapply(this.pixelTransform,pixel.slice());
+    }
     let rt=[];
     rt[0]=pixel[0]*this.devPixelRatio;
     rt[1]=pixel[1]*this.devPixelRatio;
@@ -498,6 +466,10 @@ Drawing.prototype.pixelToDevice=function(pixel) {
 Drawing.prototype.setDevPixelRatio=function(ratio){
     this.devPixelRatio=ratio;
 };
+
+Drawing.prototype.setPixelTransform=function(pixelTransform) {
+    this.pixelTransform=pixelTransform;
+}
 
 /**
  * set the context
@@ -514,13 +486,20 @@ Drawing.prototype.setRotation=function(angle){
     this.rotation=angle;
 };
 
+Drawing.prototype.setAlpha=function(opt_style,opt_stylename){
+    if (! opt_stylename) opt_stylename='alpha';
+    if (opt_style && opt_style[opt_stylename] !== undefined) this.context.globalAlpha=opt_style[opt_stylename];
+    else this.context.globalAlpha=1;
+}
+
 Drawing.prototype.setLineStyles=function(opt_style){
     if (opt_style){
-        if (opt_style.color) this.context.strokeStyle=opt_style.color;
-        if (opt_style.width) this.context.lineWidth=this.useHdpi?opt_style.width*this.devPixelRatio:opt_style.width;
-        if (opt_style.cap) this.context.lineCap=opt_style.cap;
-        if (opt_style.join) this.context.lineJoin=opt_style.join;
+        if (opt_style.color !== undefined) this.context.strokeStyle=opt_style.color;
+        if (opt_style.width !== undefined) this.context.lineWidth=this.useHdpi?opt_style.width*this.devPixelRatio:opt_style.width;
+        if (opt_style.cap !== undefined) this.context.lineCap=opt_style.cap;
+        if (opt_style.join !== undefined) this.context.lineJoin=opt_style.join;
     }
+    this.setAlpha(opt_style);
 };
 
 Drawing.prototype.cssPixelToCoord=function(xy){

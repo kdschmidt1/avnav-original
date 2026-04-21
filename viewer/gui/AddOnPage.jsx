@@ -2,16 +2,17 @@
  * Created by andreas on 02.05.14.
  */
 
-import Dynamic from '../hoc/Dynamic.jsx';
+import Dynamic from '../hoc/Dynamic.tsx';
 import globalStore from '../util/globalstore.jsx';
 import keys from '../util/keys.jsx';
 import React from 'react';
 import Page from '../components/Page.jsx';
-import InputMonitor from '../hoc/InputMonitor.jsx';
 import Mob from '../components/Mob.js';
 import Addons from '../components/Addons.js';
 import remotechannel, {COMMANDS} from "../util/remotechannel";
-import alarmhandler from "../nav/alarmhandler";
+import alarmhandler, {LOCAL_TYPES} from "../nav/alarmhandler";
+import Keyhandler from "../util/keyhandler";
+import GuiHelpers from "../util/GuiHelpers";
 
 
 class AddOnPage extends React.Component{
@@ -26,7 +27,7 @@ class AddOnPage extends React.Component{
             },
             {
                 name: 'Cancel',
-                onClick: ()=>{self.props.history.pop()}
+                onClick: ()=>{this.props.history.pop()}
             }
         ];
         this.state={
@@ -48,6 +49,10 @@ class AddOnPage extends React.Component{
             },100);
         })
         this.blockIds={};
+        this.keyHandlers=[];
+        GuiHelpers.storeHelper(this,()=>{
+            this.readAddOns();
+        },keys.gui.global.reloadSequence)
     }
     componentWillUnmount() {
         remotechannel.unsubscribe(this.remoteToken);
@@ -55,6 +60,8 @@ class AddOnPage extends React.Component{
             alarmhandler.removeBlock(id);
         }
         this.blockIds={};
+        globalStore.storeData(keys.gui.global.preventSizeChange,false);
+        this.keyHandlers.forEach((h)=>Keyhandler.deregisterHandler(h));
     }
     blockAlarm(name){
         for (let k in this.blockIds){
@@ -71,29 +78,48 @@ class AddOnPage extends React.Component{
             }
         }
     }
-
-    componentDidMount(){
-        let self=this;
+    readAddOns(){
         Addons.readAddOns(true)
             .then((items)=>{
-                let currenIndex=globalStore.getData(keys.gui.addonpage.activeAddOn);
-                if (self.props.options && self.props.options.addonName){
-                    for (let i=0;i<items.length;i++){
-                        if (items[i].name == self.props.options.addonName){
-                            if (i != currenIndex){
-                                currenIndex=i;
-                                globalStore.storeData(keys.gui.addonpage.activeAddOn,i);
+                let currenIndex = globalStore.getData(keys.gui.addonpage.activeAddOn);
+                for (let i = 0; i < items.length; i++) {
+                    if (this.props.options && this.props.options.addonName) {
+                        if (items[i].name == this.props.options.addonName) {
+                            if (i != currenIndex) {
+                                currenIndex = i;
+                                globalStore.storeData(keys.gui.addonpage.activeAddOn, i);
                             }
                             break;
                         }
                     }
+                    const handler=()=> {
+                        this.setAddon(items[i], i);
+                    };
+                    this.keyHandlers.push(handler);
+                    Keyhandler.registerHandler(handler,"addon",i+"");
                 }
                 if (currenIndex === undefined || currenIndex < 0 || currenIndex >= items.length){
                     globalStore.storeData(keys.gui.addonpage.activeAddOn,0);
                 }
-                self.setState({addOns:items})
+                this.setState({addOns:items})
             })
-            .catch(()=>{});
+            .catch(()=>{});    
+    }
+    componentDidMount(){
+        this.readAddOns();
+        globalStore.storeData(keys.gui.global.preventSizeChange,true);
+    }
+    setAddon(addOn,i){
+        remotechannel.sendMessage(COMMANDS.addOn,i);
+        if (addOn.newWindow === 'true'){
+            window.open(addOn.url,addOn.key);
+            return;
+        }
+        //first unload the iframe completely to avoid pushing to the history
+        globalStore.storeData(keys.gui.addonpage.activeAddOn, -1);
+        window.setTimeout(()=> {
+            globalStore.storeData(keys.gui.addonpage.activeAddOn, i);
+        },100);
     }
     buildButtonList(addOns,activeIndex){
         let rt = [];
@@ -104,16 +130,7 @@ class AddOnPage extends React.Component{
                     name: addOn.key,
                     icon: addOn.icon,
                     onClick: ()=> {
-                        remotechannel.sendMessage(COMMANDS.addOn,i);
-                        if (addOn.newWindow === 'true'){
-                            window.open(addOn.url,addOn.key);
-                            return;
-                        }
-                        //first unload the iframe completely to avoid pushing to the history
-                        globalStore.storeData(keys.gui.addonpage.activeAddOn, -1);
-                        window.setTimeout(()=> {
-                            globalStore.storeData(keys.gui.addonpage.activeAddOn, i);
-                        },100);
+                        this.setAddon(addOn,i);
                     },
                     toggle: activeIndex == i,
                     overflow: true,
@@ -128,8 +145,8 @@ class AddOnPage extends React.Component{
         let self=this;
         let Rt=Dynamic((props)=> {
                 let currentAddOn={};
-                if (self.state.addOns) {
-                    currentAddOn = self.state.addOns[props.activeAddOn || 0] || {};
+                if (this.state.addOns) {
+                    currentAddOn = this.state.addOns[props.activeAddOn || 0] || {};
                 }
                 let url=currentAddOn.url;
                 if (url && ! currentAddOn.keepUrl){
@@ -138,25 +155,25 @@ class AddOnPage extends React.Component{
                     else url+="?"+urladd;
                 }
                 if (currentAddOn.preventConnectionLost){
-                    this.blockAlarm('connectionLost');
+                    this.blockAlarm(LOCAL_TYPES.connectionLost);
                 }
                 else{
-                    this.unblockAlarm('connectionLost');
+                    this.unblockAlarm(LOCAL_TYPES.connectionLost);
                 }
                 let showInWindow=currentAddOn.newWindow === 'true';
-                let MainContent= InputMonitor((props)=>
+                let MainContent= (props)=>
                     <div className="addOnFrame">
                         {(currentAddOn.url && ! showInWindow)?<iframe src={url} className="addOn"/>:null}
-                    </div>);
+                    </div>;
                 return (
                     <Page
-                        {...self.props}
+                        {...this.props}
                         id="addonpage"
                         title={showInWindow?'':currentAddOn.title}
                         mainContent={
                             <MainContent/>
                         }
-                        buttonList={self.buildButtonList(self.state.addOns,props.activeAddOn||0)}/>
+                        buttonList={this.buildButtonList(this.state.addOns,props.activeAddOn||0)}/>
                 );
             },{
             storeKeys:{

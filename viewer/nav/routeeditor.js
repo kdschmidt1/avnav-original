@@ -4,11 +4,10 @@
 
 import routeobjects from './routeobjects';
 import navobjects from './navobjects';
-import Formatter from '../util/formatter';
-import NavCompute from './navcompute';
 import globalStore from '../util/globalstore.jsx';
-import keys,{KeyHelper} from '../util/keys.jsx';
+import keys from '../util/keys.jsx';
 import assign from 'object-assign';
+import NavCompute from "./navcompute";
 
 const ERROR_KEYS="either provide leg or route,index and activeName as keys";
 
@@ -52,7 +51,10 @@ const load=(storeKeys,clone)=>{
     };
     return rt;
 };
-
+const isActive=(route,activeName)=>{
+    if (!route || ! activeName) return false;
+    return (route.name === activeName);
+}
 const write=(storeKeys,data,opt_omitCallbacks)=>{
     let writeKeys=assign({},storeKeys);
     delete writeKeys.useRhumbLine;
@@ -130,6 +132,9 @@ class RouteEdit{
     getStoreKeys(opt_merge){
         return assign({},opt_merge,this.storeKeys);
     }
+    getState(){
+        return {...load(this.storeKeys)}
+    }
     addMultipleWaypoints(points,opt_before){
         if (! points || ! points.length) return;
         this.checkWritable();
@@ -179,7 +184,7 @@ class RouteEdit{
         if (old) data.index=data.route.getIndexFromPoint(old);
         write(this.writeKeys,data);
     }
-    setNewRoute(route,opt_index){
+    setNewRoute(route,opt_index,opt_ignoreWpNames){
         if (! route) return;
         this.checkWritable();
         let data=load(this.storeKeys,true);
@@ -211,7 +216,7 @@ class RouteEdit{
              *   bestMatching
              */
             let newIndex=-1;
-            if (oldRouteName == data.route.name){
+            if (oldRouteName == data.route.name && ! opt_ignoreWpNames){
                 newIndex=data.route.getIndexFromPoint(oldTarget,true);
                 if (newIndex < 0 && oldNext){
                     newIndex=data.route.getIndexFromPoint(oldNext,true);
@@ -271,20 +276,21 @@ class RouteEdit{
     }
 
 
-    deleteWaypoint(){
+    deleteWaypoint(idx){
         this.checkWritable();
         let data=load(this.storeKeys,true);
-        if (data.index < 0 || ! data.route) return;
+        if (idx === undefined) idx=data.index;
+        if (idx < 0 || ! data.route || idx >= data.route.points.length) return;
         let wasTarget=false;
         if (this.storeKeys.leg){
-            wasTarget=data.leg.getCurrentTargetIdx()==data.index;
+            wasTarget=data.leg.getCurrentTargetIdx()==idx;
         }
-        let nextPoint=data.route.deletePoint(data.index);
+        let nextPoint=data.route.deletePoint(idx);
         if (wasTarget){
             data.leg.to=nextPoint;
             if (!nextPoint) data.leg.active=false;
         }
-        if (! nextPoint && data.index > 0){
+        if (data.index < 0 || data.index >= data.route.points.length){
             //we deleted the last point (and there are just points in the route)
             data.index-=1;
         }
@@ -383,11 +389,22 @@ class RouteEdit{
         if (!data.route) return [];
         return data.route.getRoutePoints(selectedIndex,data.useRhumbLine);
     }
-    getRouteName(){
+
+    isActiveRoute(){
         let data=load(this.storeKeys);
-        let [route]=StateHelper.getRouteIndexFlag(data);
-        if (!route) return;
-        return data.route.name;
+        return StateHelper.isActiveRoute(data);
+    }
+    isHandling(route){
+        if (! route)return false;
+        let data=load(this.storeKeys);
+        return StateHelper.isSameRoute(data,route);
+    }
+    isHandlingName(name){
+        if (! name) return false;
+        let data=load(this.storeKeys);
+        let [route,,]=StateHelper.getRouteIndexFlag(data);
+        if (route && route.name === name) return true;
+        return false;
     }
     getIndexFromPoint(point,opt_bestMatching){
         let data=load(this.storeKeys);
@@ -399,13 +416,14 @@ class RouteEdit{
     }
     getRoute(){
         let data=load(this.storeKeys);
-        return data.route;
+        return StateHelper.route(data);
     }
     isRouteWritable(){
         if (! this.writable) return;
         let data=load(this.storeKeys);
-        if (!data.route) return false;
-        if (data.route.server && ! globalStore.getData(keys.properties.connectedMode,false)) return false;
+        const route=StateHelper.route(data);
+        if (! route) return false;
+        if (route.isServer() && ! globalStore.getData(keys.properties.connectedMode,false)) return false;
         return true;
     }
     hasRoute(){
@@ -419,6 +437,10 @@ class RouteEdit{
     hasActiveTarget(){
         let data=load(this.storeKeys);
         return StateHelper.hasActiveTarget(data);
+    }
+    isServerLeg(){
+        let data=load(this.storeKeys);
+        return StateHelper.isServerLeg(data);
     }
     getCurrentTarget(){
         let data=load(this.storeKeys);
@@ -451,15 +473,6 @@ class RouteEdit{
 }
 
 RouteEdit.MODES={
-    PAGE:{
-        storeKeys: {
-            route: keys.nav.routeHandler.routeForPage,
-            index: keys.nav.routeHandler.pageRouteIndex,
-            activeName: keys.nav.routeHandler.activeName,
-            useRhumbLine: keys.nav.routeHandler.useRhumbLine
-        },
-        writable:true
-    },
     EDIT:{
         storeKeys: {
             route: keys.nav.routeHandler.editingRoute,
@@ -490,13 +503,13 @@ export class StateHelper{
     static getRouteIndexFlag(state){
         if (state.leg) {
             if (state.leg.isRouting()) {
-                return [state.leg.currentRoute, state.index!==undefined?state.index:-1, state.leg.getRouteName() === state.activeName];
+                return [state.leg.currentRoute, state.index!==undefined?state.index:-1, isActive(state.leg.getRoute(),state.activeName)];
             }
             return [undefined,-1,false];
         }
         else{
             if (state.route){
-                return [state.route,state.index!==undefined?state.index:-1,state.route.name == state.activeName]
+                return [state.route,state.index!==undefined?state.index:-1,isActive(state.route,state.activeName)]
             }
         }
         return [undefined,-1,false];
@@ -529,6 +542,12 @@ export class StateHelper{
         return state.leg.isRouting();
     }
 
+    static activeTarget(state){
+        if (! state.leg) return;
+        if (!state.leg.isRouting()) return;
+        return state.leg.to;
+    }
+
     static targetName(state){
         if (! StateHelper.hasActiveTarget(state)) return;
         if (! state.leg.to) return;
@@ -539,23 +558,61 @@ export class StateHelper{
         if (! StateHelper.hasActiveTarget(state)) return false;
         return state.leg.getCurrentTargetIdx() == state.index;
     }
-
+    static route(state){
+        const [route]=StateHelper.getRouteIndexFlag(state);
+        return route;
+    }
     static hasRoute(state){
-        if (state.route) return true;
+        return !!StateHelper.route(state);
+    }
+
+    static anchorWatchDistance(state){
+        if (! state.leg) return;
+        return state.leg.anchorWatch();
+    }
+
+    static isServerRoute(state){
+        const route=StateHelper.route(state);
+        if (!route) return false;
+        return route.isServer();
+    }
+    static isServerLeg(state){
         if (! state.leg) return false;
-        return state.leg.hasRoute();
+        return state.leg.server;
+    }
+    static isSameRoute(state,route){
+        const sroute=StateHelper.route(state);
+        if (!!sroute !== !!route) return false;
+        if (! sroute) return false;
+        return sroute.name === route.name;
+
     }
 
 }
 
-//register the guard callback to prevent others from updating the routes
-
-let keylist=[];
-for (let k in [RouteEdit.MODES.EDIT,RouteEdit.MODES.PAGE]) {
-    let ownKeys = assign({}, k);
-    delete ownKeys.activeName;
-    keylist=keylist.concat(KeyHelper.flattenedKeys(ownKeys))
-}
-//globalStore.register(guard,keylist);
-
 export default  RouteEdit;
+export const getClosestRoutePoint = (route, waypoint) => {
+    let idx = route.findBestMatchingIdx(waypoint);
+    let useRhumbLine = globalStore.getData(keys.nav.routeHandler.useRhumbLine);
+    if (idx >= 0) {
+        //now we check if we are somehow between the found point and the next
+        let currentTarget = route.getPointAtIndex(idx);
+        if (currentTarget.compare(waypoint)) return currentTarget;
+        let nextTarget = route.getPointAtIndex(idx + 1);
+        if (nextTarget && currentTarget) {
+            let nextDistanceWp = NavCompute.computeDistance(waypoint, nextTarget, useRhumbLine).dts;
+            let nextDistanceRt = NavCompute.computeDistance(currentTarget, nextTarget, useRhumbLine).dts;
+            //if the distance to the next wp is larger then the distance between current and next
+            //we stick at current
+            //we allow additionally a xx% catch range
+            //so we only go to the next if the distance to the nextWp is xx% smaller then the distance between the rp
+            let limit = nextDistanceRt * (100 - globalStore.getData(keys.properties.routeCatchRange, 50)) / 100;
+            if (nextDistanceWp <= limit) {
+                return nextTarget;
+            } else {
+                return currentTarget;
+            }
+        }
+        return currentTarget;
+    }
+}

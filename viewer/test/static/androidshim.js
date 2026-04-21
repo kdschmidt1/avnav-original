@@ -34,7 +34,7 @@ console.log("android shim loaded");
         console.log("##ANDROIDSHIM: "+txt);
     }
     function event(key,id){
-        window.avnav.android.receiveEvent(key , id);
+        window.avnavAndroid.receiveEvent(key , id);
     }
     var openTransfers={};
     window.avnavAndroid = {
@@ -44,7 +44,7 @@ console.log("android shim loaded");
         },
         handleUpload: function (url, data) {
             log("handleUpload",url,data)
-            return { status:"not implemented"};
+            return JSON.stringify({ status:"not implemented"});
         },
         requestFile: function (type, id, readFile) {
             var pf=function(){

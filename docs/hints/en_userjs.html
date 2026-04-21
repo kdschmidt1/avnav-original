@@ -33,21 +33,29 @@
         alt="" class="inlineimage">to store the file and reload AvNav to watch
       your changes in action.</p>
     <p>I would recommend to download and backup the file regularily after
-      editing since there is no version control included in AvNav.</p>
-    <p>The current file template you can also find on <a href="https://github.com/wellenvogel/avnav/blob/master/viewer/static/user.js">github</a>.</p>
-    <h2>Widgets</h2>
-    <p>Basically you can add the following types of widgets:</p>
+      editing since there is no version control included in AvNav.<br>
+      A proven way of editing is the usage of 2 browser windows (or tabs):</p>
+    <ul>
+      <li>in one window you edit user.js and save it (leaving the window open)</li>
+      <li>in the second window you reload AvNav after every save in the first
+        window and test the functionality. The browser developer tools can
+        assist you by displaying errors - and you can even debug your code.</li>
+    </ul>
+    <p>Using the workflow you can implement changes rather fast.</p>
+    <p>The current file template you can also find on <a href="https://github.com/wellenvogel/avnav/blob/release-20250822/viewer/static/user.js">github</a>.</p>
+    <h2><a name="widgets" id="widgets"></a>Widgets</h2>
+    <p>You can add the following types of widgets:</p>
     <ul>
       <li>widgets with an own formatter (and potentially fixed values retrieved
-        from the store) based on the default widget (example 1-&nbsp; <a href="https://github.com/wellenvogel/avnav/blob/master/viewer/static/user.js">user.js</a>:
+        from the store) based on the default widget (example 1-&nbsp; <a href="https://github.com/wellenvogel/avnav/blob/release-20250822/viewer/static/user.js">user.js</a>:
         rpmWidget, <a href="https://github.com/wellenvogel/avnav/blob/master/server/plugins/testPlugin/plugin.js">testPlugin</a>:
         testPluing_simpleWidget)</li>
       <li>adaptations and extensions of the graphics widgets (<a href="https://canvas-gauges.com/">canvas
-          gauges)</a> (example 2 - <a href="https://github.com/wellenvogel/avnav/blob/master/viewer/static/user.js">user.js</a>:
+          gauges)</a> (example 2 - <a href="https://github.com/wellenvogel/avnav/blob/release-20250822/viewer/static/user.js">user.js</a>:
         rpmGauge)<br>
         This way you can access canvas widget parameters that are currently not
         directly accessible.</li>
-      <li>widgets with own HTML code (example 3 - <a href="https://github.com/wellenvogel/avnav/blob/master/viewer/static/user.js">user.js</a>:
+      <li>widgets with own HTML code (example 3 - <a href="https://github.com/wellenvogel/avnav/blob/release-20250822/viewer/static/user.js">user.js</a>:
         userSpecialRpm, <a href="https://github.com/wellenvogel/avnav/blob/master/server/plugins/testPlugin/plugin.js">TestPlugin</a>:
         testPlugin_courseWidget)</li>
       <li>widgets with canvas graphics (example within the <a href="https://github.com/wellenvogel/avnav/blob/master/server/plugins/testPlugin/plugin.js">TestPlugin</a>:
@@ -67,10 +75,10 @@
     <p>For <a href="https://canvas-gauges.com/">canvas gauge</a> widgets you
       can set some parameters (see <a href="https://canvas-gauges.com/documentation/user-guide/configuration">canvas
         gauges description</a>) either to fixed values (in this case they must
-      become part of the widget definition - see the values in the&nbsp; <a href="https://github.com/wellenvogel/avnav/blob/edda409268c6ff71143f8ea665e1a729ccc4ff13/viewer/static/user.js#L134">example
+      become part of the widget definition - see the values in the&nbsp; <a href="https://github.com/wellenvogel/avnav/blob/release-20250822/viewer/static/user.js#L134">example
         starting from line 134</a>) or you can make them settable by the user
       within the layout editor (put them into the <a href="#widgetparameter">editable
-        widget parameters</a>&nbsp; -&nbsp; <a href="https://github.com/wellenvogel/avnav/blob/edda409268c6ff71143f8ea665e1a729ccc4ff13/viewer/static/user.js#L156">example
+        widget parameters</a>&nbsp; -&nbsp; <a href="https://github.com/wellenvogel/avnav/blob/release-20250822/viewer/static/user.js#L156">example
         starting from line 156</a>).</p>
     <p>Additionally you can define an <a href="#formatter">own formatter</a>
       and set it as default for the widget.</p>
@@ -91,7 +99,7 @@
       gauges is ignored!</p>
     <p>Beside the parameters you can also define a translateFunction. This
       function receives an object with all the current values and can modify
-      this before it is set at canvas gauges(<a href="https://github.com/wellenvogel/avnav/blob/edda409268c6ff71143f8ea665e1a729ccc4ff13/viewer/static/user.js#L104">example
+      this before it is set at canvas gauges(<a href="https://github.com/wellenvogel/avnav/blob/release-20250822/viewer/static/user.js#L104">example
         from line 104</a>). This function needs to be "stateless". That means
       the output must only depend form the input or any other fixed values.
       Otherwise some changes potentially will not been drawn.</p>
@@ -205,7 +213,7 @@
           <td>This function is called with the current values as parameters and
             must return an object containing the derived values.<br>
             This may be used to transform values before rendering if no own
-            renderXXX is implemented - see <a href="https://github.com/wellenvogel/avnav/blob/master/viewer/static/user.js">example</a>.</td>
+            renderXXX is implemented - see <a href="https://github.com/wellenvogel/avnav/blob/release-20250822/viewer/static/user.js">example</a>.</td>
         </tr>
         <tr>
           <td>initFunction</td>
@@ -285,7 +293,7 @@
     <p>Correct:</p>
     <div class="code">let userWidget={<br>	renderHtml: function(context,props){<br>		return "&lt;p&gt;Hello&lt;/p&gt;";<br>	}<br>}</div>
     <h2><a name="widgetparameter" id="widgetparameter"></a></h2>
-    <p>Inside the widget context you can store userc&nbsp; data that will be
+    <p>Inside the widget context you can store user&nbsp; data that will be
       needed in consecutive function calls.<br>
       Additionally it contains a couple of functions you can use in your widget
       code.</p>
@@ -305,8 +313,8 @@
             event handlers inside your rendered HTML you need to provide the
             handler function there.<br>
             E.g.:<br>
-            renderHtml returns &lt;button onclick="clickHandler"/&gt;) - you
-            need to register a function "clickHandler" here.<br>
+            renderHtml returns &lt;button onclick="clickHandler"/&gt; - you need
+            to register a function "clickHandler" here.<br>
             this.eventHandler.clickHandler=function(ev){...}<br>
             See <a href="https://github.com/wellenvogel/avnav/blob/7035cba511ea400ebcd7a972b6b0baf79deba04d/server/plugins/testPlugin/plugin.js#L150">TestPlugin</a>.</td>
         </tr>
@@ -371,9 +379,9 @@
     </table>
     <a name="widgetparameter" id="widgetparameter"></a>
     <h2>Widget Parameters</h2>
-    <p>As a second parameter you can provide an object containing parameters to
-      be displayed in the layout editor.</p>
-    <p>Examples can be found in the <a href="https://github.com/wellenvogel/avnav/blob/master/viewer/static/user.js">user.js
+    <p>When you register a widget you can provide a second parameter - an object
+      containing parameters to be displayed in the layout editor.</p>
+    <p>Examples can be found in the <a href="https://github.com/wellenvogel/avnav/blob/release-20250822/viewer/static/user.js">user.js
         template</a>. Values selected by the user in the Layout editor will
       become part of the properties provided to the renderHtml and renderCanvas
       functions (except for parameters of type KEY: the values read from the
@@ -396,7 +404,7 @@
         <tr>
           <td>type</td>
           <td>string</td>
-          <td>STRING, NUMBER, KEY, SELECT, ARRAY, BOOLEAN, COLOR<br>
+          <td>STRING, NUMBER, FLOAT, KEY, SELECT, ARRAY, BOOLEAN, COLOR<br>
             The type of the parameter. Depending on the type a different user
             dialog will be shown:<br>
             for COLOR this will be a color selector, for SELECT a select list
@@ -414,7 +422,9 @@
           <td>Array<br>
             (only for type SELECT)</td>
           <td>An array of strings or objects {name:'xxx',value:'yyy'} - they
-            will be displayed in the select list.</td>
+            will be displayed in the select list.<br>
+            Instead of the array you can provide a function that returns the
+            array - or a Promise that returns the array in resolve.</td>
         </tr>
       </tbody>
     </table>
@@ -492,7 +502,7 @@ formatTemperature.parameters=[
 fileref.setAttribute("type","text/javascript");
 fileref.setAttribute("src", "my_nice_lib.js");
 document.getElementsByTagName("head")[0].appendChild(fileref)</div>
-    <p>I recommend to assign css classes to your own widgets so to provide easy
+    <p>I recommend to assign css classes to your own widgets providing easy
       means of adapting their look and feel later on by <a href="usercss.html">user
         defined CSS</a>. You should not use HTML ids in your code as the widgets
       might be instantiated multiple times on one page.</p>
@@ -502,7 +512,7 @@ document.getElementsByTagName("head")[0].appendChild(fileref)</div>
     <p>If you need to create an additional file in the user directory (e.g. text
       or HTML) you can directly do this using the "+" button (lower right) -
       afterwards you can directly edit the file.</p>
-    <h2>Feature Formatter</h2>
+    <h2><a name="featureFormatter" id="featureFormatter"></a>Feature Formatter</h2>
     <p>Since version 20210114 you can register functions to convert and format
       data from overlay files for the "Feature Info" dialog.<br>
       You can implement them in the user.js or by a plugin.</p>

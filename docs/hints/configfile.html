@@ -106,7 +106,8 @@
             sieht dann so aus: $RMC.<br>
             Wenn dem Filter ein ^ vorangestellt wird, wird er negiert, also
             ^$RMC heisst: keine RMC records. AIS Daten kann man mit dem Filter
-            "!" oder "!AIVDM" matchen.</td>
+            "!" oder "!AIVDM" matchen.<br>
+            Mehrere Enträge müssen durch , getrennt werden.</td>
           <td>$RMC,^$RMB,!AIVDM</td>
         </tr>
         <tr>
@@ -226,13 +227,33 @@
         </tr>
       </tbody>
     </table>
-    <h3>AVNFeeder</h3>
-    <p>Die interne NMEA Liste und Dekodier-Einheit. Kategorie 2 (1x, nicht nötig
-      ab Version 20200325).</p>
-    <p>Diese Einheit hat keine Parameter mehr. In früheren Versionen wurde hier
-      der gpsd für die Dekodierung genutzt, daher sind u.U. noch Parameter zu
-      finden, die sich darauf beziehen. In neueren Versionen sollte der Eintrag
-      so geändert werden, dass useGpsd="false" enthalten ist.</p>
+    <h3>AVNQueue</h3>
+    <p>Die interne NMEA Warteschlange . category 2 (einmal, optional).</p>
+    <table style="width: 100%" border="1">
+      <tbody>
+        <tr>
+          <td>Name</td>
+          <td>online</td>
+          <td>Description</td>
+          <td>default/template</td>
+        </tr>
+        <tr>
+          <td>maxList</td>
+          <td>X</td>
+          <td>max number of NMEA records in the queue</td>
+          <td>300</td>
+        </tr>
+        <tr>
+          <td>naxAge</td>
+          <td>X</td>
+          <td>max age in seconds an entry is kept in the queue. Older entries
+            are discarded.<br>
+            This prevents slow outputs to send out data that is already very
+            old.</td>
+          <td>3</td>
+        </tr>
+      </tbody>
+    </table>
     <h3>AVNHttpServer</h3>
     <p>Der interne HTTP server. Kategorie 1 (einmal, erforderlich).</p>
     <p>Neben den Parametern für AVNHttpServer gibt es einige Unter-Einträge, die
@@ -432,7 +453,7 @@
           <td>X</td>
           <td>Timeout in s, nach dem das Gerät ohne Daten geschlossen und wieder
             geöffnet wird</td>
-          <td>1</td>
+          <td>2</td>
         </tr>
         <tr>
           <td>bytesize</td>
@@ -723,6 +744,20 @@
           <td>Entferne alle Zeichen vor $ oder ! in einer Zeile. </td>
           <td>aus</td>
         </tr>
+        <tr>
+          <td>joinMulticast</td>
+          <td>X</td>
+          <td>Tritt einer <a href="https://de.wikipedia.org/wiki/Multicast">Multicast</a>
+            Gruppe bei, das ermöglich den Empfang von Multicast Nachrichten.</td>
+          <td>aus</td>
+        </tr>
+        <tr>
+          <td>multicastAddr</td>
+          <td>X</td>
+          <td>Multicast Adresse. Damit wird der Empfang von Multicast
+            Nachrichten auf dieser Adresse ermöglicht.</td>
+          <td>224.0.0.1</td>
+        </tr>
       </tbody>
     </table>
     <h3>AVNUdpWriter</h3>
@@ -745,14 +780,14 @@
           <td>port</td>
           <td>X</td>
           <td>UDP Ziel port</td>
-          <td><br>
+          <td>2000<br>
           </td>
         </tr>
         <tr>
           <td>host</td>
           <td>X</td>
           <td>UDP Zieladresse</td>
-          <td><br>
+          <td>localhost<br>
           </td>
         </tr>
         <tr>
@@ -882,6 +917,12 @@
           <td><br>
           </td>
         </tr>
+        <tr>
+          <td>sendOwn</td>
+          <td>X</td>
+          <td>sende empfangene Daten auf der gleichen Verbindung</td>
+          <td>aus</td>
+        </tr>
       </tbody>
     </table>
     <h3>AVNSocketReader</h3>
@@ -975,6 +1016,12 @@
           <td>Entferne alle Zeichen vor $ oder ! in einer Zeile. </td>
           <td>aus</td>
         </tr>
+        <tr>
+          <td>sendOwn</td>
+          <td>X</td>
+          <td>sende empfangene Daten auf der gleichen Verbindung</td>
+          <td>aus</td>
+        </tr>
       </tbody>
     </table>
     <h3>AVNNmea0183ServiceReader</h3>
@@ -1035,6 +1082,12 @@
           <td>, separierte Liste von Source-Namen, deren Daten nicht gesendet
             werden</td>
           <td>leer</td>
+        </tr>
+        <tr>
+          <td>sendOwn</td>
+          <td>X</td>
+          <td>sende empfangene Daten auf der gleichen Verbindung</td>
+          <td>aus</td>
         </tr>
         <tr>
           <td>name</td>
@@ -1110,6 +1163,12 @@
           <td>X</td>
           <td>XDR Transducer Name für Luftdruck</td>
           <td>Barometer</td>
+        </tr>
+        <tr>
+          <td>offsetPress</td>
+          <td>X</td>
+          <td>addiere diesen Wert (in hPa) zum gemessenen Druck</td>
+          <td>0</td>
         </tr>
         <tr>
           <td>nameHumid</td>
@@ -1189,6 +1248,12 @@
           <td>Barometer</td>
         </tr>
         <tr>
+          <td>offsetPress</td>
+          <td>X</td>
+          <td>addiere diesen Wert (in hPa) zum gemessenen Druck</td>
+          <td>0</td>
+        </tr>
+        <tr>
           <td>nameTemp</td>
           <td>X</td>
           <td>XDR transducer Name für Temperatur</td>
@@ -1253,6 +1318,12 @@
           <td>X</td>
           <td>XDR Transducer Name für Luftdruck</td>
           <td>Barometer</td>
+        </tr>
+        <tr>
+          <td>offsetPress</td>
+          <td>X</td>
+          <td>addiere diesen Wert (in hPa) zum gemessenen Druck</td>
+          <td>0</td>
         </tr>
         <tr>
           <td>nameHumid</td>
@@ -1464,40 +1535,27 @@
           <td>default/template</td>
         </tr>
         <tr>
-          <td>importDir</td>
-          <td><br>
-          </td>
-          <td>Verzeichnis aus dem die zu importierenden Karten gelesen werden</td>
-          <td>&lt;datadir&gt;/import</td>
-        </tr>
-        <tr>
-          <td>workDir</td>
-          <td><br>
-          </td>
-          <td>Arbeitsverzeichnis für den import</td>
-          <td>&lt;datadir&gt;/work</td>
-        </tr>
-        <tr>
-          <td>waittime</td>
+          <td>filesettle</td>
           <td>X</td>
           <td>Zeit in s, die nach dem Finden einer Datei im Import-Verzeichnis
             gewartet wird, bevor der Konverter startet</td>
           <td>30</td>
         </tr>
         <tr>
-          <td>knownExtensions</td>
+          <td>dirsettle</td>
           <td>X</td>
-          <td>Liste der Dateinamensendungen, die in der App zum Hochladen in den
-            Importer angeboten werden</td>
-          <td>kap,map,geo</td>
+          <td>Zeit in s, die nach dem Finden eines Verzeichnisses im
+            Import-Verzeichnis gewartet wird, bevor der Konverter startet</td>
+          <td>10</td>
         </tr>
         <tr>
-          <td>keepInfoTime</td>
+          <td>scanInterval</td>
           <td><br>
           </td>
-          <td>Zeit in s, die eine Information über einen Import noch stehen
-            bleibt</td>
-          <td>30</td>
+          <td>Zeit (in s) zwischen 2 automatsichen Scans des Import
+            Verzeichnisses. 0: kein automatischer Scan (aber ausgelöst beim
+            Hochladen)</td>
+          <td>0</td>
         </tr>
         <tr>
           <td>enabled</td>
@@ -1545,7 +1603,8 @@
         </tr>
       </tbody>
     </table>
-    <a name="AVNCommandHandler"></a><h3>AVNCommandHandler</h3>
+    <a name="AVNCommandHandler"></a>
+    <h3>AVNCommandHandler</h3>
     <p>Ausführen von Kommandos, u.a. für Alarme. Kategorie 2 (einmalig, nicht
       notwendig).</p>
     <p>Der AVNCommandHandler selbst hat keine Parameter. Es können jedoch
@@ -1692,10 +1751,14 @@
           <td>sound</td>
         </tr>
         <tr>
-          <td>stopAlarmPin</td>
+          <td><span style="text-decoration: line-through;">stopAlarmPin</span></td>
           <td>X</td>
-          <td>Nur auf Raspberry Pi. Wenn gesetzt (board Nummerierung), schaltet
-            ein Low an diesem Pin Alarme aus</td>
+          <td><span style="text-decoration: line-through;">Nur auf Raspberry Pi.
+              Wenn gesetzt (board Nummerierung), schaltet ein Low an diesem Pin
+              Alarme aus.</span><br>
+            Ab Version 2025xxxx gibt es ein separates plugin "<a href="#pluginResetAlarm">resetAlarm</a>"
+            und eine Konfiguration muss dort erfolgen. Eine vorhandene
+            Einstellung wird bei der Installation migriert.</td>
           <td>leer</td>
         </tr>
       </tbody>
@@ -1758,14 +1821,14 @@
           <td>enabled</td>
           <td>X</td>
           <td>Nur wenn auf true, ist das Plugin aktiv</td>
-          <td>false</td>
+          <td>aus</td>
         </tr>
         <tr>
           <td>allowKeyOverride</td>
           <td>X</td>
           <td>Muss gesetzt werden, wenn Datum und Zeit von canboat gelesen
             werden sollen</td>
-          <td>false</td>
+          <td>aus</td>
         </tr>
         <tr>
           <td>port</td>
@@ -1788,6 +1851,12 @@
           <td>0 (aus)</td>
         </tr>
         <tr>
+          <td>readPos</td>
+          <td>X</td>
+          <td>Lese die Position von PGN 129025 und cog/sog von PGN 129026</td>
+          <td>ein</td>
+        </tr>
+        <tr>
           <td>sourceName</td>
           <td>X</td>
           <td>Kanalname, der für RMC genutzt wird</td>
@@ -1808,6 +1877,42 @@
         </tr>
       </tbody>
     </table>
+    <h4><a name="pluginResetAlarm" id="pluginResetAlarm"></a>Parameter für
+      system-resetAlarm (nur mit dem Paket avnav-raspi)</h4>
+    <table style="width: 100%" border="1">
+      <tbody>
+        <tr>
+          <td>Name</td>
+          <td>online</td>
+          <td>Beschreibung</td>
+          <td>default</td>
+        </tr>
+        <tr>
+          <td>gpio</td>
+          <td>X</td>
+          <td>GPIO pin (Bord Nummerierung) an dem ein Taster zum Rücksetzen von
+            Alarmen angeschlossen ist</td>
+          <td>--</td>
+        </tr>
+        <tr>
+          <td>lowActive</td>
+          <td>X</td>
+          <td>Wenn gesetzt ist der Eingang L-aktiv, d.h. die Alarme werden mit
+            einem L an diesem Eingang zurück gesetzt</td>
+          <td>true</td>
+        </tr>
+        <tr>
+          <td>pullUpDown</td>
+          <td>X</td>
+          <td>Wenn gesetzt wird für den Eingang ein pull-up bzw. pull-down
+            Widerstand aktiviert, so dass nur ein externer Taster angeschlossen
+            werden muss.</td>
+          <td>true</td>
+        </tr>
+      </tbody>
+    </table>
+    <p><br>
+    </p>
     <h3>AVNChartHandler</h3>
     <p>Verwaltung der Karten. Kategorie 2 (einmal, muss nicht enthalten sein)</p>
     <table style="width: 100%" border="1">
@@ -1915,9 +2020,9 @@
       </tbody>
     </table>
     <h3>AVNSignalKHandler</h3>
-    <p>New with 20220421.<br>
-      For a description refer to the <a href="CanboatAndSignalk.html#configuration">SignalK
-        Documentation</a>.</p>
+    <p>Neu mit 20220421.<br>
+      Für eine Beschreibung siehe die <a href="CanboatAndSignalk.html#configuration">SignalK
+        Dokumentation</a>.</p>
     <p></p>
     <p> </p>
   </body>

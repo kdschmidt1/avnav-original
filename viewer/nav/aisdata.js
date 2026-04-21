@@ -3,404 +3,331 @@
  */
 import navobjects from './navobjects';
 import Formatter from '../util/formatter';
-import NavCompute from './navcompute';
 import globalStore from '../util/globalstore.jsx';
 import keys from '../util/keys.jsx';
-import Requests from '../util/requests.js';
-import base from '../base.js';
-import assign from "object-assign";
-import aisformatter from './aisformatter';
+import {aisproxy} from './aisformatter';
+import {AisOptionMappings} from "./aiscomputations";
+import Helper from "../util/helper";
+import base from "../base";
 
 
-const AisTarget=navobjects.Ais;
+export const fillOptions=()=>{
+    let rt={};
+    for (let k in AisOptionMappings){
+        let mapping=AisOptionMappings[k];
+        if (mapping instanceof Object){
+            if ( (mapping.key instanceof Object)) {
+                let v = globalStore.getMultiple(mapping.key);
+                rt[k] = mapping.f(v);
+            }
+            else{
+                let v = globalStore.getData(mapping.key);
+                rt[k]=mapping.f(v);
+            }
+        }
+        else{
+            rt[k]=globalStore.getData(mapping);
+        }
+    }
+    return rt;
+}
+
+const RECOMPUTE_TRIGGER=2000; //trigger AIS recomputation every xxx ms even if no boat data change
+
+class WorkerErrorHistory{
+    constructor() {
+        this.history=[];
+        this.max=20;
+        this.maxAge=30000;
+    }
+    add(entry){
+        let txt=entry;
+        let details;
+        if (entry instanceof Object){
+            txt=entry.message||entry+"";
+            details=entry.details||entry.stack;
+        }
+        this.history.push({ts:Helper.now(),entry:txt,details: details})
+        if (this.history.length > this.max) this.history.shift();
+    }
+    getEntries(now=Helper.now()){
+        const rt=[];
+        for (let i=this.history.length-1;i>=0;i--){
+            if (this.history[i].ts >= (now - this.maxAge)) rt.push(this.history[i]);
+        }
+        return rt;
+    }
+    clear(){
+        this.history=[];
+    }
+}
+
 /**
  * the handler for the ais data
  * query the server...
  * @constructor
  */
-let AisData=function(navdata){
+class AisData {
+    constructor(navdata) {
 
-    this.navdata=navdata;
+        this.navdata = navdata;
 
-    /** @private
-     * @type {Array.<AisTarget>}
-     * */
-    this.currentAis=[];
+        this.receivedAis=[];
 
-    /**
-     * the last successfull query
-     * @type {number}
-     */
-    this.lastAisQuery=new Date().getTime();
-    /**
-     * @private
-     * @type {null}
-     */
-    this.timer=null;
-    /**
-     * @private
-     * @type {number}
-     */
-    this.aisErrors=0;
-    /**
-     * the mmsi of the tracked target
-     * @type {number}
-     */
-    this.trackedAIStarget=null;
+        /**
+         * @private
+         * @type {null}
+         */
+        this.timer = null;
+        /**
+         * @private
+         * @type {number}
+         */
+        this.aisErrors = 0;
+        /**
+         * the mmsi of the tracked target
+         * @type {number}
+         */
+        this.trackedAIStarget = undefined;
 
-    /**
-     * the mmsi of the computed nearest target
-     * @type {null}
-     */
-    this.computedNearestMmsi=null;
-    /**
-     * the mmsi we have computed for a warning
-     * @type {null}
-     */
-    this.computedWarningMmsi=null;
+        this.lastBoatData=0;
+        this.lastReceived=0;
 
+        globalStore.register(this, [
+            keys.gui.global.propertySequence,
+            keys.nav.routeHandler.useRhumbLine
+        ]);
 
-    /**
-     * the nearest target - being returned when values are queried
-     *
-     * @type {AisTarget}
-     */
-    this.nearestAisTarget={};
+        globalStore.register(()=>{
+            this.sendBoatData()
+        },[keys.nav.gps.position,keys.nav.gps.speed,keys.nav.gps.course,keys.nav.ais.trackedMmsi])
 
-    globalStore.register(this,[keys.nav.gps,keys.nav.routeHandler.useRhumbLine]);
+        /**
+         * @private
+         * @type {Formatter}
+         */
+        this.formatter = Formatter;
+        /**
+         * @private
+         * a map mmsi->hideTime for hidden ais targets
+         * @type {{}}
+         */
+        this.hiddenTargets = {};
 
-    /**
-     * @private
-     * @type {Formatter}
-     */
-    this.formatter=Formatter;
-    /**
-     * @private
-     * a map mmsi->hideTime for hidden ais targets
-     * @type {{}}
-     */
-    this.hiddenTargets={}
+        /**
+         * @private
+         * remember the last AIS center we ever used
+         * this will be used if there is no current GPS available
+         * @type {undefined}
+         */
+        this.lastAisCenter = undefined;
 
-    /**
-     * @private
-     * remember the last AIS center we ever used
-     * this will be used if there is no current GPS available
-     * @type {undefined}
-     */
-    this.lastAisCenter=undefined;
-};
-/**
- *
- * @param boatPos boat pos, course, speed
- * @param ais the ais target, will be modified
- * @private
- */
-AisData.prototype._computeAisTarget=function(boatPos,ais){
-    let useRhumbLine= globalStore.getData(keys.nav.routeHandler.useRhumbLine);
-    ais.warning=false;
-    ais.tracking=false;
-    ais.nearest=false;
-    let computeProperties=globalStore.getMultiple({
-        minAISspeed: keys.properties.minAISspeed
-    });
-    let dst = NavCompute.computeDistance(boatPos, new navobjects.Point(parseFloat(ais.lon||0), parseFloat(ais.lat||0)),useRhumbLine);
-    let cpadata = NavCompute.computeCpa({
-            lon: boatPos.lon,
-            lat: boatPos.lat,
-            course: boatPos.course || 0,
-            speed: boatPos.speed || 0
-        },
-        {
-            lon: parseFloat(ais.lon || 0),
-            lat: parseFloat(ais.lat || 0),
-            course: parseFloat(ais.course || 0),
-            speed: parseFloat(ais.speed || 0)
-        },
-        computeProperties,
-        useRhumbLine
-    );
-    ais.distance = dst.dts;
-    ais.headingTo = dst.course;
-    if (cpadata.tcpa !== undefined && cpadata.cpa !== undefined) {
-        ais.cpa = cpadata.cpa;
-        ais.tcpa = cpadata.tcpa;
-    }
-    else {
-        ais.cpa = 0;
-        ais.tcpa = 0;
-    }
-    ais.passFront = cpadata.front;
-    if (!ais.shipname) ais.shipname = "unknown";
-    if (!ais.callsign) ais.callsign = "????";
-};
-/**
- * compute all the cpa data...
- * @private
- */
-AisData.prototype.handleAisData=function() {
-    let boatPos = globalStore.getMultiple(keys.nav.gps);
-    let trackedTarget=null; //ref to tracked target
-    let aisWarningAis = null;
-    let aisTargets=[];
-    let onlyMoving=globalStore.getData(keys.properties.aisOnlyShowMoving,false);
-    let showA=globalStore.getData(keys.properties.aisShowA,true);
-    let showB=globalStore.getData(keys.properties.aisShowB,true);
-    let showOther=globalStore.getData(keys.properties.aisShowOther,false);
-    let aisMinSpeed = parseFloat(globalStore.getData(keys.properties.aisMinDisplaySpeed, 0));
-    let hideTime=parseFloat(globalStore.getData(keys.properties.aisHideTime,30))*1000;
-    let foundTrackedTarget = false;
-    let now=(new Date()).getTime();
-    for (let aisidx in this.currentAis) {
-        let ais =this.currentAis[aisidx];
-        ais.receiveTime=now;
-        let shouldHandle = !onlyMoving || (parseFloat(ais.speed) >= aisMinSpeed);
-        if (shouldHandle ){
-            let clazz=aisformatter.format('clazz',ais);
-            if (clazz === "A"){
-                shouldHandle=showA;
-            }
-            else if (clazz === "B"){
-                shouldHandle=showB;
-            }
-            else{
-                shouldHandle=showOther;
-            }
-        }
-        if (!shouldHandle) continue;
-        if (ais.heading !== undefined){
-            if (parseInt(ais.heading) === 511) {
-                ais.heading=undefined;
-            }
-        }
-        let hidden=this.hiddenTargets[ais.mmsi];
-        if (hidden !== undefined){
-            if (hidden > now || (hidden + hideTime) < now){
-                delete this.hiddenTargets[ais.mmsi];
-                hidden=undefined;
-            }
-        }
-        if (hidden !== undefined) ais.hidden=true;
-        aisTargets.push(ais);
-        if (boatPos.valid) {
-            this._computeAisTarget(boatPos, ais);
-            let warningCpa = globalStore.getData(keys.properties.aisWarningCpa);
-            if (ais.cpa && ais.cpa < warningCpa && ais.tcpa && Math.abs(ais.tcpa) < globalStore.getData(keys.properties.aisWarningTpa)) {
-                if (aisWarningAis) {
-                    if (ais.tcpa >= 0) {
-                        if (aisWarningAis.tcpa > ais.tcpa || aisWarningAis.tcpa < 0) aisWarningAis = ais;
-                    } else {
-                        if (aisWarningAis.tcpa < 0 && aisWarningAis.tcpa < ais.tcpa) aisWarningAis = ais;
+        this.aisOptions=fillOptions();
+        this.workerSequence = 0;
+        this.worker = new Worker(new URL("./aisworker.js", import.meta.url));
+        this.worker.onmessage = ({data}) => {
+            this.lastReceived=Helper.now();
+            //console.log("Aisdata: ", data);
+            if (data.type === 'data') {
+                let storeKeys = {
+                    nearestAisTarget: keys.nav.ais.nearest,
+                    currentAis: keys.nav.ais.list,
+                    updateCount: keys.nav.ais.updateCount
+                };
+                let nearestAisTarget=data.aisWarning?aisproxy(data.aisWarning):undefined;
+                if (data.data && data.data.length && !nearestAisTarget) {
+                    if (this.trackedAIStarget !== undefined) {
+                        for (let i = 0; i < data.data.length; i++) {
+                            if (data.data[i].received && data.data[i].received.mmsi == this.trackedAIStarget) {
+                                nearestAisTarget = aisproxy(data.data[i]);
+                                break;
+                            }
+                        }
                     }
-                } else aisWarningAis = ais;
+                    if (nearestAisTarget === undefined && data.data[0].nearest) {
+                        nearestAisTarget = aisproxy(data.data[0]);
+                    }
+                }
+                globalStore.storeMultiple({
+                    nearestAisTarget: nearestAisTarget,
+                    currentAis: data.data,
+                    updateCount: globalStore.getData(keys.nav.ais.updateCount, 0) + 1
+                }, storeKeys);
             }
-        }
-        if (ais.mmsi == this.trackedAIStarget) {
-            foundTrackedTarget = true;
-            ais.tracking = true;
-            trackedTarget = ais;
-        }
-    }
-    if (!foundTrackedTarget) this.trackedAIStarget = null;
-    if (aisTargets) {
-        aisTargets.sort(this.aisSort);
-        if (aisTargets.length) {
-            aisTargets[0].nearest = true;
-            this.computedNearestMmsi=aisTargets[0].mmsi;
-        }
-    }
-    if (aisWarningAis) {
-        aisWarningAis.warning = true;
-        this.computedWarningMmsi=aisWarningAis.mmsi;
-    }
-    else{
-        this.computedWarningMmsi=null;
-    }
-    //handling of the nearest target
-    //warning active - this one
-    //no tracked target set - nearest
-    //tracked set - this one
-    if (aisTargets.length) {
-        if (aisWarningAis) this.nearestAisTarget = aisWarningAis;
-        else {
-            if (trackedTarget) this.nearestAisTarget = trackedTarget;
-            else this.nearestAisTarget = aisTargets[0];
-        }
-    } else {
-        this.nearestAisTarget = {};
-        this.computedWarningMmsi=null;
-        this.computedNearestMmsi=null;
-    }
-    let storeKeys = {
-        nearestAisTarget: keys.nav.ais.nearest,
-        currentAis: keys.nav.ais.list,
-        updateCount: keys.nav.ais.updateCount
-    };
-    globalStore.storeMultiple({
-        nearestAisTarget: this.nearestAisTarget,
-        currentAis: aisTargets,
-        updateCount: globalStore.getData(keys.nav.ais.updateCount, 0) + 1
-    }, storeKeys);
-
-};
-
-AisData.prototype.dataChanged=function(){
-    this.handleAisData();
-};
-/**
- * sorter for the AIS data - sort by distance
- * @param a
- * @param b
- * @returns {number}
- */
-AisData.prototype.aisSort=function(a,b) {
-    try {
-        if (a.distance == b.distance) return 0;
-        if (a.distance < b.distance) return -1;
-        return 1;
-    } catch (err) {
-        return 0;
-    }
-};
-
-/**
- *
- */
-AisData.prototype.startQuery=function() {
-    let url = "?request=ais";
-    let center=this.navdata.getAisCenter();
-    let self=this;
-    let timeout=parseInt(globalStore.getData(keys.properties.aisQueryTimeout));
-    if (! center){
-        center=this.lastAisCenter;
-    }
-    else{
-        this.lastAisCenter=center;
-    }
-    if (! center){
-        window.clearTimeout(this.timer);
-        this.timer=window.setTimeout(function(){
-            self.startQuery();
-        },timeout);
-        return;
-    }
-    let param={
-        request: 'ais',
-        distance: this.formatter.formatDecimal(globalStore.getData(keys.properties.aisDistance)||10,4,1)
-    };
-    for (let idx=0;idx<center.length;idx++){
-        if (! center[idx]) continue;
-        let sfx=idx!==0?idx+"":"";
-        param['lat'+sfx]=this.formatter.formatDecimal(center[idx].lat,3,5,false,true);
-        param['lon'+sfx]=this.formatter.formatDecimal(center[idx].lon,3,5,false,true);
-    }
-    Requests.getJson(param,{checkOk:false,timeout:timeout}).then(
-        (data)=>{
-            self.aisErrors=0;
-            self.lastAisQuery=new Date().getTime();
-            let aisList=[];
-            if (data['class'] && data['class'] == "error") aisList=[];
-            else aisList=data;
-            self.currentAis=aisList;
-            try {
-                self.handleAisData();
-            }catch (e){
-                let x=e;
+            if (data.type === 'error') {
+                this.workerErrors.add(data.error);
             }
-            window.clearTimeout(self.timer);
-            self.timer=window.setTimeout(function(){self.startQuery();},timeout);
-        }
-    ).catch(
-        (error)=>{
-            base.log("query ais error");
-            self.aisErrors+=1;
-            if (self.aisErrors >= globalStore.getData(keys.properties.maxAisErrors)){
-                self.currentAis=[];
-                self.handleAisData();
+        };
+        this.workerErrors=new WorkerErrorHistory();
+        this.worker.onerror=(error)=>{
+            base.log("aisworker error:",error);
+            let finfo=error.filename.replace(/.*\//,'')+':'+error.lineno;
+            this.workerErrors.add(
+                {message: error.message,
+                 details:finfo
+                }
+            );
+        };
+        this.postWorker({
+            type: 'config',
+            options:this.aisOptions
+        })
+        this.postWorker({
+            type:'hidden',
+            hiddenTargets: this.hiddenTargets
+        })
+
+        /**
+         * trigger recompute AIS
+         * @type {number}
+         */
+        this.timer=window.setInterval(()=>{
+            const now=Helper.now();
+            if ((this.lastBoatData+RECOMPUTE_TRIGGER) < now){
+                this.sendBoatData();
             }
-            window.clearTimeout(self.timer);
-            self.timer=window.setTimeout(function(){self.startQuery();},timeout);
-        }
-    );
-};
-
-
-
-/**
- * get an ais target by mmsi, return undefined if not found
- * @param mmsi
- * @returns {*}
- */
-AisData.prototype.getAisByMmsi=function(mmsi){
-    let rt=undefined;
-    if (mmsi == 0 || mmsi == null){
-        rt=assign({},this.nearestAisTarget);
+            if ((this.lastReceived +3 * RECOMPUTE_TRIGGER) < now){
+                this.workerErrors.add({
+                    message: "no response from AIS worker",
+                    details: (this.lastReceived===0)?"no response at all":"no response for "+(now-this.lastReceived)+" ms"
+                });
+            }
+        },RECOMPUTE_TRIGGER*1.1);
     }
-    if (! rt) {
-        for (let i in this.currentAis) {
-            if (this.currentAis[i].mmsi === mmsi) {
-                rt = assign({}, this.currentAis[i]);
+
+    sendBoatData(){
+        this.lastBoatData=Helper.now();
+        this.postWorker({
+            type:'boat',
+            boatPosition:globalStore.getData(keys.nav.gps.position),
+            boatSpeed: globalStore.getData(keys.nav.gps.speed),
+            boatCourse: globalStore.getData(keys.nav.gps.course),
+            trackedMMsi: globalStore.getData(keys.nav.ais.trackedMmsi)
+        })
+    }
+
+    dataChanged() {
+        this.aisOptions=fillOptions();
+        this.postWorker({
+            type: 'config',
+            options:this.aisOptions
+        })
+    }
+
+    postWorker(data){
+        if (! this.worker) return;
+        this.workerSequence++;
+        this.worker.postMessage({
+            ...data,
+            sequence: this.workerSequence
+        })
+    }
+
+
+    /**
+     *
+     */
+    _startQueryInt() {
+        let center = this.navdata.getAisCenter();
+        let timeout = parseInt(globalStore.getData(keys.properties.aisQueryTimeout));
+        if (!center) {
+            center = this.lastAisCenter;
+        } else {
+            this.lastAisCenter = center;
+        }
+        if (!center) {
+            window.clearTimeout(this.timer);
+            this.timer = window.setTimeout(() => {
+                this._startQueryInt();
+            }, timeout);
+            return;
+        }
+        this.postWorker({
+            type: 'query',
+            center: center,
+            distance: globalStore.getData(keys.properties.aisDistance),
+            timeout: timeout
+        })
+        this.timer = window.setTimeout(() => {
+            this._startQueryInt();
+        }, timeout);
+
+    }
+    startQuery(){
+        this.dataChanged();
+        this._startQueryInt();
+    }
+
+    /**
+     * get an ais target by mmsi, return undefined if not found
+     * @param mmsi
+     * @returns {*}
+     */
+    getAisByMmsi(mmsi) {
+        if (!mmsi) {
+            return globalStore.getData(keys.nav.ais.nearest);
+        }
+        let currentAis=globalStore.getData(keys.nav.ais.list);
+        for (let i in currentAis) {
+            if (currentAis[i].mmsi == mmsi) {
+                return aisproxy(currentAis[i]);
             }
         }
     }
-    if (rt){
-        if (this.computedNearestMmsi === rt.mmsi) rt.nearest = true;
-        if (this.computedWarningMmsi === rt.mmsi) rt.warning = true;
-        return rt;
+
+    /**
+     * get the position of an AIS target
+     * @param mmsi
+     * @returns {*}
+     */
+    getAisPositionByMmsi(mmsi) {
+        let ais = this.getAisByMmsi(mmsi);
+        if (!ais) return undefined;
+        return new navobjects.Point(parseFloat(ais.lon || 0), parseFloat(ais.lat || 0));
     }
-    return undefined;
-};
-/**
- * get the position of an AIS target
- * @param mmsi
- * @returns {*}
- */
-AisData.prototype.getAisPositionByMmsi=function(mmsi){
-    let ais=this.getAisByMmsi(mmsi);
-    if (! ais) return undefined;
-    return new navobjects.Point(parseFloat(ais.lon||0),parseFloat(ais.lat||0));
-};
 
+    /**
+     * return the mmsi of the tracked target or 0
+     * @returns {number}
+     */
+    getTrackedTarget() {
+        return this.trackedAIStarget;
+    }
 
+    setHidden(mmsi) {
+        this.hiddenTargets[mmsi] = Helper.now();
+        this.postWorker({
+            type: 'hidden',
+            hiddenTargets:this.hiddenTargets
+        })
+    }
 
-/**
- * return the mmsi of the tracked target or 0
- * @returns {number}
- */
-AisData.prototype.getTrackedTarget=function(){
-    return this.trackedAIStarget;
-};
-
-AisData.prototype.setHidden=function(mmsi){
-    let now=(new Date()).getTime();
-    this.hiddenTargets[mmsi]=now;
-    this.handleAisData();
-}
-AisData.prototype.unsetHidden=function(mmsi){
-    if (this.hiddenTargets[mmsi] !== undefined) {
-        delete this.hiddenTargets[mmsi];
-        this.handleAisData();
+    unsetHidden(mmsi) {
+        if (this.hiddenTargets[mmsi] !== undefined) {
+            delete this.hiddenTargets[mmsi];
+            this.postWorker({
+                type: 'hidden',
+                hiddenTargets:this.hiddenTargets
+            })
+        }
+    }
+    /**
+     * set the target to be tracked, 0 to use nearest
+     * @param {number} mmsi
+     */
+    setTrackedTarget(mmsi) {
+        if (this.trackedAIStarget == mmsi) return;
+        this.trackedAIStarget = mmsi;
+        globalStore.storeData(keys.nav.ais.trackedMmsi, mmsi);
+        //just retrigger computation once
+        this.postWorker({
+            type: 'config'
+        })
+    }
+    getErrors(){
+        return this.workerErrors.getEntries();
     }
 }
-AisData.prototype.isHidden=function(mmsi){
-    let now=(new Date()).getTime();
-    let hidden=this.hiddenTargets[mmsi];
-    if (hidden === undefined) return false;
-    if (hidden > now || (hidden + globalStore.getData(keys.properties.aisHideTime,30)*1000) < now){
-        delete this.hiddenTargets[mmsi];
-        return false;
-    }
-    return true;
 
-}
-/**
- * set the target to be tracked, 0 to use nearest
- * @param {number} mmsi
- */
-AisData.prototype.setTrackedTarget=function(mmsi){
-    if (this.trackedAIStarget == mmsi) return;
-    this.trackedAIStarget=mmsi;
-    globalStore.storeData(keys.nav.ais.trackedMmsi,mmsi);
-    this.handleAisData();
-};
 
 export default AisData;

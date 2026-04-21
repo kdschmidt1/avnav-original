@@ -28,6 +28,8 @@ import PropTypes from "prop-types";
 import React from "react";
 import {useKeyEventHandler} from "../util/GuiHelpers";
 import {SortableProps, useAvNavSortable} from "../hoc/Sortable";
+import {ResizeFrame} from "../hoc/Resizable";
+import Helper from "../util/helper";
 
 export const WidgetProps={
     onClick:    PropTypes.func,
@@ -41,36 +43,53 @@ export const WidgetProps={
 }
 
 export const WidgetHead=(props)=> {
-    if (props.unit === undefined && props.caption === undefined) return null;
+    if (! Helper.isset(props.unit,true) &&
+        ! Helper.isset(props.caption,true)
+        && ! Helper.isset(props.infoMiddle,true))return null;
+    const infoMiddle = (Helper.isset(props.infoMiddle,true)) ? props.infoMiddle : props.disconnect ?
+        <div className={'disconnectedIcon'}/>
+        :undefined;
     return (
-    <div className="widgetHead">
-        <div className='infoLeft'>{props.caption}</div>
-        {props.unit !== undefined ?
-            <div className='infoRight'>{props.unit}</div>
-            : <div className='infoRight'></div>
-        }
-    </div>
+        <div className="widgetHead">
+            {Helper.isset(props.caption, true) && <div className='infoLeft'>{props.caption}</div>}
+            {infoMiddle !== undefined && <div className={'infoMiddle'}>{infoMiddle}</div>}
+            {Helper.isset(props.unit,true) ?
+                <div className='infoRight'>{props.unit}</div>
+                : <div className='infoRight'></div>
+            }
+        </div>
     )
 }
 
-WidgetHead.propTypes={
+WidgetHead.propTypes = {
     unit: PropTypes.string,
-    caption: PropTypes.string
+    caption: PropTypes.string,
+    infoMiddle: PropTypes.element,
+    disconnect: PropTypes.bool
 }
 
 export const WidgetFrame=(props)=> {
     useKeyEventHandler(props, "widget");
     const sortableProps = useAvNavSortable(props.dragId)
-    let classes = "widget ";
-    if (props.isAverage) classes += " average";
-    if (props.className) classes += " " + props.className;
-    if (props.addClass) classes += " " + props.addClass;
-    const rsClass=(props.resize === false)?"noresize":"resize";
+    let classes = Helper.concatsp(
+        "widget ",
+        (props.isAverage)?"average":undefined,
+        props.className,
+        props.addClass,
+        (props.mode === 'horizontal')?"horizontal":undefined);
+    const resize=!(props.resize === false) && props.mode === 'gps';
     return <div className={classes} onClick={props.onClick} {...sortableProps} style={props.style}>
         <WidgetHead {...props}/>
-        <div className={rsClass}>
-            {props.children}
-        </div>
+        {resize &&
+            <ResizeFrame resizeSequence={props.resizeSequence}>
+                {props.children}
+            </ResizeFrame>
+        }
+        {!resize &&
+            <div className="noresize">
+                {props.children}
+            </div>
+        }
     </div>
 }
 WidgetFrame.propTypes={
@@ -78,5 +97,6 @@ WidgetFrame.propTypes={
     ...SortableProps,
     ...WidgetHead.propTypes,
     resize: PropTypes.bool,
+    resizeSequence: PropTypes.number,
     addClass: PropTypes.string
 };

@@ -5,10 +5,12 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.location.LocationManager;
 import android.net.Uri;
+import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -17,7 +19,7 @@ import android.preference.*;
 
 import android.provider.Settings;
 import androidx.annotation.NonNull;
-import androidx.core.content.ContextCompat;
+
 import android.util.DisplayMetrics;
 import android.view.Menu;
 import android.view.MenuInflater;
@@ -35,6 +37,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 
+import de.wellenvogel.avnav.util.AvnWorkDir;
 import de.wellenvogel.avnav.worker.GpsService;
 import de.wellenvogel.avnav.worker.NeededPermissions;
 import de.wellenvogel.avnav.main.Constants;
@@ -51,6 +54,7 @@ import de.wellenvogel.avnav.util.DialogBuilder;
 
 public class SettingsActivity extends PreferenceActivity {
     private static int PERMSSION_REQUEST_CODE=1000;
+    private boolean keepOpen;
 
     private static synchronized int getNextPermissionRequestCode(){
         PERMSSION_REQUEST_CODE++;
@@ -72,6 +76,7 @@ public class SettingsActivity extends PreferenceActivity {
     private static class DialogRequest{
         int requestCode;
         Runnable callback;
+        public boolean exitOnCancel=false;
         DialogRequest(int requestCode,Runnable callback){
             this.requestCode=requestCode;
             this.callback=callback;
@@ -120,23 +125,26 @@ public class SettingsActivity extends PreferenceActivity {
         String workDir=sharedPrefs.getString(Constants.WORKDIR,"");
         if (! workDir.isEmpty()){
             try {
-                String internal = activity.getFilesDir().getCanonicalPath();
-                String external = (activity.getExternalFilesDir(null)!=null)?activity.getExternalFilesDir(null).getCanonicalPath():null;
-                if (workDir.equals(internal)){
-                    edit.putString(Constants.WORKDIR,Constants.INTERNAL_WORKDIR);
-                    AvnLog.i("migrating workdir to internal");
-                }
-                if (workDir.equals(external)){
-                    edit.putString(Constants.WORKDIR,Constants.EXTERNAL_WORKDIR);
-                    AvnLog.i("migrating workdir to external");
-                }
-                else{
-                    if (workDir.equals(Constants.EXTERNAL_WORKDIR) && external == null){
-                        AvnLog.i("external workdir not available, change to internal");
-                        edit.putString(Constants.WORKDIR,Constants.INTERNAL_WORKDIR);
+                AvnUtil.WorkDir parser=new AvnUtil.WorkDir(false);
+                File wd=parser.getFileForConfig(activity,workDir);
+                if (wd == null){
+                    String newConfig=null;
+                    //we did not find the woirkdir
+                    //check if we have an old config with the complete path
+                    for (AvnWorkDir.Entry e: parser.getEntries()){
+                        if (e.getFile().getAbsolutePath().equals(workDir)){
+                            newConfig=e.getConfigName();
+                            AvnLog.i("found workdir cfg "+workDir+" - existing, migrating to "+newConfig);
+                        }
+                    }
+                    if (newConfig == null) {
+                        AvnLog.i("migration: workdir "+workDir+" not found");
+                    }
+                    else {
+                        edit.putString(Constants.WORKDIR,newConfig);
                     }
                 }
-            }catch(IOException e){
+            }catch(Throwable e){
                 AvnLog.e("Exception while migrating workdir",e);
             }
         }
@@ -158,7 +166,7 @@ public class SettingsActivity extends PreferenceActivity {
         return 0;
     }
     static class PermissionRequestDialog extends DialogRequest{
-        PermissionRequestDialog(SettingsActivity activity,int requestCode,  boolean doRestart,String [] permissions, int title) {
+        PermissionRequestDialog(SettingsActivity activity, int requestCode, boolean doRestart, String [] permissions, boolean exitOnCancel) {
             super(requestCode, new Runnable() {
                 @Override
                 public void run() {
@@ -208,6 +216,9 @@ public class SettingsActivity extends PreferenceActivity {
                                         intent.setData(uri);
                                         activity.startActivity(intent);
                                     }
+                                    if (i == DialogInterface.BUTTON_NEGATIVE && exitOnCancel){
+                                        activity.resultNok();
+                                    }
                                     if (!activity.runNextDialog() ) {
                                         if(doRestart)
                                             activity.resultOk();
@@ -228,20 +239,21 @@ public class SettingsActivity extends PreferenceActivity {
         super.onCreate(savedInstanceState);
         openRequests.clear();
         resultHandler.clear();
+        keepOpen=false;
         injectToolbar();
         getToolbar().setOnMenuItemClickListener(this);
         updateHeaderSummaries(true);
         boolean checkInitially=false;
         Bundle b=getIntent() != null?getIntent().getExtras():null;
         String [] permissionRequests=null;
-        int permissionTitle=R.string.notifyTitle;
+        boolean exitOnCancel=false;
         if (b != null){
             checkInitially=b.getBoolean(Constants.EXTRA_INITIAL,false);
             if (b.containsKey(Constants.EXTRA_PERMSSIONS)) {
                 permissionRequests = b.getStringArray(Constants.EXTRA_PERMSSIONS);
             }
-            if (b.containsKey(Constants.EXTRA_PERMSSIONTITLE)){
-                permissionTitle=b.getInt(Constants.EXTRA_PERMSSIONTITLE);
+            if (b.containsKey(Constants.EXTRA_PERMSSIONEXITCANCEL)){
+                exitOnCancel=b.getBoolean(Constants.EXTRA_PERMSSIONEXITCANCEL);
             }
         }
         if (checkInitially) {
@@ -251,7 +263,7 @@ public class SettingsActivity extends PreferenceActivity {
             }
         }
         else if (permissionRequests != null && permissionRequests.length != 0){
-            openRequests.add(new PermissionRequestDialog(this,getNextPermissionRequestCode(),false,permissionRequests,permissionTitle));
+            openRequests.add(new PermissionRequestDialog(this,getNextPermissionRequestCode(),false,permissionRequests, exitOnCancel));
             if (! runNextDialog()){
                 resultNoRestart();
             }
@@ -259,14 +271,15 @@ public class SettingsActivity extends PreferenceActivity {
     }
 
     private void runPermissionDialogs(){
+        keepOpen=false;
         SharedPreferences sharedPrefs=getSharedPreferences(Constants.PREFNAME, Context.MODE_PRIVATE);
         NeededPermissions perm=GpsService.getNeededPermissions(this);
-        if (perm.gps && !checkGpsPermission(this)) {
+        if ((perm.gps == NeededPermissions.Mode.NEEDED) && !checkGpsPermission(this)) {
             int request = getNextPermissionRequestCode();
             openRequests.add(new PermissionRequestDialog(this, request, true, new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION}, R.string.needGps));
+                    Manifest.permission.ACCESS_COARSE_LOCATION}, false));
         }
-        if (perm.gps && ! checkGpsEnabled(this)){
+        if ((perm.gps == NeededPermissions.Mode.NEEDED) && ! checkGpsEnabled(this)){
             int request=getNextPermissionRequestCode();
             openRequests.add(new DialogRequest(request, new Runnable() {
                 @Override
@@ -287,7 +300,7 @@ public class SettingsActivity extends PreferenceActivity {
                 }
             }));
         }
-        if (!checkOrCreateWorkDir(AvnUtil.getWorkDir(sharedPrefs, this))) {
+        if (!checkOrCreateWorkDir(this,sharedPrefs)) {
             int request = getNextPermissionRequestCode();
             openRequests.add(new DialogRequest(request, new Runnable() {
                 @Override
@@ -298,13 +311,16 @@ public class SettingsActivity extends PreferenceActivity {
                             if (which == DialogInterface.BUTTON_NEGATIVE) {
                                 resultNok();
                             }
-                            if (!runNextDialog()) resultOk();
+                            keepOpen=true;
+                            if (!runNextDialog()){
+                                resultOk();
+                            }
                         }
                     });
                 }
             }));
         }
-        if (perm.gps && ! checkPowerSavingMode(this)){
+        if ((perm.gps == NeededPermissions.Mode.NEEDED) && ! checkPowerSavingMode(this)){
             int request = getNextPermissionRequestCode();
             openRequests.add(new DialogRequest(request, new Runnable() {
                 @Override
@@ -324,23 +340,47 @@ public class SettingsActivity extends PreferenceActivity {
                 }
             }));
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && ! checkBatteryOptimizationOff(this)){
+            int request = getNextPermissionRequestCode();
+            openRequests.add(new DialogRequest(request, new Runnable() {
+                @Override
+                public void run() {
+                    DialogBuilder.confirmDialog(SettingsActivity.this, 0, R.string.batteryOptimization, new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface dialogInterface, int i) {
+                            openRequests.clear();
+                            if (i == DialogInterface.BUTTON_POSITIVE) {
+                                Uri uri = new Uri.Builder()
+                                        .scheme("package")
+                                        .opaquePart(getPackageName())
+                                        .build();
+                                startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, uri));
+                            }
+                            else {
+                                if (!runNextDialog()) resultOk();
+                            }
+                        }
+                    });
+                }
+            }));
+        }
         if (! checkNotificationPermission(this)){
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 openRequests.add(new PermissionRequestDialog(
                         this,
                         getNextPermissionRequestCode(),
                         true,
-                        new String[]{Manifest.permission.POST_NOTIFICATIONS},R.string.permissionNotification));
+                        new String[]{Manifest.permission.POST_NOTIFICATIONS}, false));
             }
 
         }
-        if (perm.bluetooth && ! checkBluetooth(this)){
+        if ((perm.bluetooth == NeededPermissions.Mode.NEEDED) && ! checkBluetooth(this)){
             if (Build.VERSION.SDK_INT >= 31) {
                 openRequests.add(new PermissionRequestDialog(
                         this,
                         getNextPermissionRequestCode(),
                         true,
-                        new String[]{Manifest.permission.BLUETOOTH_CONNECT},R.string.needsBluetoothCon));
+                        new String[]{Manifest.permission.BLUETOOTH_CONNECT}, false));
             }
         }
         if (! runNextDialog()) resultOk();
@@ -361,7 +401,7 @@ public class SettingsActivity extends PreferenceActivity {
     }
 
 
-    public static boolean checkGpsEnabled(final Activity activity) {
+    public static boolean checkGpsEnabled(final Context activity) {
         LocationManager locationService = (LocationManager) activity.getSystemService(activity.LOCATION_SERVICE);
         return locationService.isProviderEnabled(LocationManager.GPS_PROVIDER);
     }
@@ -386,6 +426,21 @@ public class SettingsActivity extends PreferenceActivity {
         }
         return true;
     }
+    public static boolean checkBatteryOptimizationOff(final Context context){
+        PowerManager pm= (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (! pm.isIgnoringBatteryOptimizations(context.getPackageName())){
+                //only return false here if the device has a battery
+                //this is no 100% solution as its not sure that no battery really means it would not run standby optimizations
+                IntentFilter ifilter = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
+                Intent batteryStatus = context.registerReceiver(null, ifilter);
+                if (batteryStatus.getBooleanExtra(BatteryManager.EXTRA_PRESENT,false)){
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
 
     public static boolean checkNotificationPermission(final Context ctx){
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU){
@@ -404,46 +459,37 @@ public class SettingsActivity extends PreferenceActivity {
     public static boolean checkSettings(Activity activity, boolean checkPermissions){
         handleMigrations(activity);
         SharedPreferences sharedPrefs=activity.getSharedPreferences(Constants.PREFNAME, Context.MODE_PRIVATE);
-        if (! checkOrCreateWorkDir(AvnUtil.getWorkDir(sharedPrefs,activity))){
+        if (! checkOrCreateWorkDir(activity,sharedPrefs)){
             return false;
         }
         if (! checkNotificationPermission(activity)) return false;
         if (! checkPermissions) return true;
         NeededPermissions perm=GpsService.getNeededPermissions(activity);
-        if (perm.bluetooth && ! checkBluetooth(activity)) return false;
-        if (! perm.gps) return true;
+        if ((perm.bluetooth == NeededPermissions.Mode.NEEDED) && ! checkBluetooth(activity)) return false;
+        if (! checkBatteryOptimizationOff(activity)) return false;
+        if (perm.gps != NeededPermissions.Mode.NEEDED) return true;
         if (! checkGpsEnabled(activity)) return false;
         if (! checkGpsPermission(activity)) return false;
         if (! checkPowerSavingMode(activity)) return false;
         return true;
     }
 
-    private static boolean checkOrCreateWorkDir(File workdir) {
-        if (workdir.equals(new File(""))) return false;
-        try {
-            createWorkingDir(workdir);
+    private static boolean checkOrCreateWorkDir(Context ctx,SharedPreferences prefs) {
+        String cfg=prefs.getString(Constants.WORKDIR,"");
+        if (cfg.isEmpty()) return false;
+        AvnUtil.WorkDir parser=new AvnUtil.WorkDir(false);
+        AvnWorkDir.Entry wdentry= parser.getEntryForConfig(ctx,cfg);
+        if (wdentry == null) return false;
+        File workDir= wdentry.getFile();
+        if (workDir == null) return false;
+        try{
+            parser.createDirs(ctx,wdentry);
         } catch (Exception e) {
             return false;
         }
         return true;
     }
 
-
-
-    private static void createWorkingDir(File workdir) throws Exception{
-        if (! workdir.isDirectory()){
-            workdir.mkdirs();
-        }
-        if (! workdir.isDirectory()) throw new Exception("unable to create "+workdir.getAbsolutePath());
-        final String subdirs[]=new String[]{"charts","tracks","routes","user"};
-        for (String s: subdirs){
-            File sub=new File(workdir,s);
-            if (! sub.isDirectory()){
-                AvnLog.d(Constants.LOGPRFX, "creating subdir " + sub.getAbsolutePath());
-                if (! sub.mkdirs()) throw new Exception("unable to create directory "+sub.getAbsolutePath());
-            }
-        }
-    }
 
     static public boolean externalStorageAvailable(){
         String state=Environment.getExternalStorageState();
@@ -454,6 +500,7 @@ public class SettingsActivity extends PreferenceActivity {
 
     @Override
     public void onBackPressed(){
+        AvnLog.i(Constants.LOGPRFX,"settings back");
         if (!isMultiPane() && ! hasHeaders()){
             super.onBackPressed();
             return;
@@ -503,6 +550,7 @@ public class SettingsActivity extends PreferenceActivity {
         setIntent(intent);
     }
     private void checkResult(){
+        keepOpen=false;
         if (! checkSettings(this,true)) {
             runPermissionDialogs();
             return;
@@ -512,16 +560,19 @@ public class SettingsActivity extends PreferenceActivity {
     private void resultOk(){
         Intent result=new Intent();
         setResult(Activity.RESULT_OK,result);
-        finish();
+        AvnLog.i(Constants.LOGPRFX,"settings ok");
+        if (! keepOpen)finish();
     }
     private void resultNoRestart(){
         Intent result=new Intent();
         setResult(Constants.RESULT_NO_RESTART,result);
-        finish();
+        AvnLog.i(Constants.LOGPRFX,"settings no restart");
+        if (! keepOpen) finish();
     }
     private void resultNok(){
         Intent result=new Intent();
         setResult(Activity.RESULT_FIRST_USER,result);
+        AvnLog.i(Constants.LOGPRFX,"settings nok");
         finish();
     }
     @Override

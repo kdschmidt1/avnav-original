@@ -19,10 +19,15 @@
       "mobon": ["m","Control- "],
       "anchoron": ["i"],
       "anchoroff": ["Control-i"],
-      "toggledimm": ["z"]
+      "toggledimm": ["z"],
+      "dummy": ["Control-g"]
     },
     "button":{
       "Cancel":"Escape"
+    },
+    "dialogButton": {
+      "Cancel": "Escape",
+      "cancel": "Escape"
     },
     "addon":{
       "0":"Control-0",
@@ -71,6 +76,19 @@
       "ShowStatus":"Control-s",
       "ShowGps": "d",
       "Night":["c","Control-c","Control-g"]
+    }
+  },
+  "viewpage": {
+    "_config": {
+      "mode": "explicit"
+    },
+    "button": {
+      "ViewPageSave": "Control-s",
+      "Cancel":"Escape"
+    },
+    "dialogButton": {
+      "Cancel": "Escape",
+      "cancel": "Escape"
     }
   }
 }

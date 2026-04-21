@@ -13,8 +13,12 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import {SortContext, SortModes, useAvNavSortFrame} from "../hoc/Sortable";
+import {injectav} from "../util/helper";
 
-const getKey=function(obj){
+const getKey=function(obj,opt_keyFunction){
+    if (opt_keyFunction){
+        return opt_keyFunction(obj);
+    }
     let rt=obj.key;
     if (rt !== undefined) return rt;
     rt=obj.name;
@@ -46,24 +50,45 @@ const Content=(props)=>{
                 else {
                     ItemClass = props.itemClass;
                 }
+                let onClick;
                 if (!itemProps.onClick && props.onItemClick) {
-                    itemProps.onClick=(data)=>{
+                    onClick=(idata)=>{
+                        const data=injectav(idata);
                         if (data && data.stopPropagation) data.stopPropagation();
                         if (data && data.preventDefault) data.preventDefault();
                         if (props.reverse){
                             let len=props.itemList?props.itemList.length:0;
-                            props.onItemClick({...itemProps,index:len-itemProps.index},data);
+                            data.avnav.item=data.avnav.item?{...data.avnav.item,index:len-itemProps.index}:{...itemProps,index:len-itemProps.index};
                         }
                         else {
-                            props.onItemClick(itemProps, data);
+                            data.avnav.item=data.avnav.item?{...data.avnav.item,index:itemProps.index}:{...itemProps};
                         }
+                        props.onItemClick(data);
                     }
                 }
-                return <ItemClass key={itemProps.key} {...itemProps}/>
+                return <ItemClass onClick={onClick} key={itemProps.key} {...itemProps}/>
             })}
         </div>
     );
 };
+
+const SortableContent =
+    (sprops) => {
+        if (sprops.dragdrop) {
+            return (
+                <SortContext
+                    onDragEnd={sprops.onSortEnd}
+                    id={sprops.dragFrame}
+                    allowOther={sprops.allowOther}
+                    reverse={sprops.reverse}
+                    mode={sprops.horizontal? SortModes.horizontal:SortModes.vertical}>
+                    <Content {...sprops}/>
+                </SortContext>
+            )
+        } else {
+            return <Content {...sprops}/>
+        }
+    };
 
 const ItemList = (props) => {
     const itemList = [];
@@ -72,7 +97,7 @@ const ItemList = (props) => {
     const allitems = props.itemList || [];
     allitems.forEach((entry) => {
         const itemProps = {...entry};
-        let key = getKey(entry);
+        let key = getKey(entry,props.keyFunction);
         //we allow for multiple items with the same name
         //we try at most 20 times to get a unique key by appending _idx
         let tries = 20;
@@ -107,23 +132,7 @@ const ItemList = (props) => {
     if (props.fontSize) {
         style.fontSize = props.fontSize;
     }
-    const SortableContent =
-        (sprops) => {
-            if (props.dragdrop) {
-                return (
-                    <SortContext
-                        onDragEnd={props.onSortEnd}
-                        id={props.dragFrame}
-                        allowOther={props.allowOther}
-                        reverse={props.reverse}
-                        mode={props.horizontal? SortModes.horizontal:SortModes.vertical}>
-                            <Content {...sprops}/>
-                    </SortContext>
-                )
-            } else {
-                return <Content {...sprops}/>
-            }
-        };
+
     if (props.scrollable) {
         return (
             <div onClick={props.onClick} className={className} style={style} ref={(el) => {
@@ -159,7 +168,8 @@ ItemList.propTypes={
         onSortEnd:      PropTypes.func,
         style:          PropTypes.object,
         dragFrame:      PropTypes.string,
-        allowOther:     PropTypes.bool //allow dragging from other frames
+        allowOther:     PropTypes.bool, //allow dragging from other frames
+        keyFunction:    PropTypes.func
 };
 Content.propTypes=ItemList.propTypes;
 export default ItemList;

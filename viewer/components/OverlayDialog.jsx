@@ -7,67 +7,198 @@
  * the static methods will return promises for simple dialog handling
  */
 
-import React, {Children, cloneElement, createContext, useContext, useEffect, useRef, useState} from 'react';
-import assign from 'object-assign';
-import InputMonitor from '../hoc/InputMonitor.jsx';
-import DB from './DialogButton.jsx';
+import React, {Children, cloneElement, forwardRef, useEffect, useRef, useState} from 'react';
+import {useInputMonitor} from '../hoc/InputMonitor.jsx';
+import DialogButton from './DialogButton.jsx';
 import MapEventGuard from "../hoc/MapEventGuard";
 import PropTypes from "prop-types";
-import DialogButton from "./DialogButton.jsx";
-import Helper from "../util/helper";
+import Helper, {concatsp} from "../util/helper";
+import {
+    DialogContextImpl,
+    globalContext,
+    ReactDialogContextImpl,
+    useDialogContext
+} from "./DialogContext";
 
 
-/**
- * the basic overlay dialog elements
- */
-
-const Container=MapEventGuard(React.forwardRef((props,ref)=>{
+export const OverlayContainer=MapEventGuard(React.forwardRef((props,ref)=>{
     const dialogContext=useDialogContext();
-    const style={zIndex:dialogContext.zIndex};
+    const style={zIndex:dialogContext.zIndex,
+        left:dialogContext.left,right:dialogContext.right};
     return (
-        <div className="overlay_cover_active" onClick={props.onClick} style={style} ref={ref}>
+        <div
+            className={Helper.concatsp("overlay_cover_active",props.coverClassName)}
+            onClick={props.onClick}
+            style={style}
+            ref={ref}>
+            <div
+                className={Helper.concatsp("dialog",props.dialogClassName)}
+                onClick={
+                    (ev) => {
+                        //ev.preventDefault();
+                        ev.stopPropagation();
+                    }
+                }
+                style={{zIndex:dialogContext.zIndex+1}}
+            >
             {props.children}
+            </div>
         </div>
     )
 }));
 
-export const OverlayDialog = ({className,closeCallback,children}) => {
-    let [DialogDisplay,setDialog]=useDialog(); //for nested dialogs
-    const dialogContext=useDialogContext(); //if we are nested - just handle the z index
-    let classNameS = "dialog";
-    if (className) classNameS += " " + className;
-    const close=closeCallback;
-    const ourZIndex=dialogContext.zIndex+10;
+const OverlayDialog = ({dialogClassName,coverClassName, children}) => {
+    const dialogContext = useDialogContext();
+    const nestedDialogContext = useRef(new DialogContextImpl(dialogContext));
+    useInputMonitor();
     return (
-        <DialogContext
-            closeDialog={close}
-            showDialog={setDialog}
-            zIndex={ourZIndex}
+        <OverlayContainer
+            onClick={() => dialogContext.closeDialog()}
+            dialogClassName={dialogClassName}
+            coverClassName={coverClassName}
         >
-        <Container onClick={close}>
-            <div
-                className={classNameS}
-                onClick={
-                (ev) => {
-                    //ev.preventDefault();
-                    ev.stopPropagation();
-                }
-                }
-                style={{zIndex:ourZIndex+1}}
+            <DialogContext
+                context={nestedDialogContext.current}
             >
                 <DialogDisplay/>
-                {Children.map(children,(child)=>cloneElement(child,{closeCallback:close}))}
-            </div>
-        </Container>
-        </DialogContext>
+                {Children.map(children, (child) => cloneElement(child, {closeCallback: close}))}
+            </DialogContext>
+        </OverlayContainer>
     );
 }
 
+export const DialogDisplay=()=>{
+    const dialogContext=useDialogContext();
+    let [Display,setDialog]=useDialog();
+    useEffect(() => {
+        const id=dialogContext.setDisplay(setDialog);
+        return ()=>dialogContext.removeDisplay(id);
+    }, []);
+    return <Display/>
+}
 
-OverlayDialog.propTypes={
-    closeCallback: PropTypes.func, //handed over to the child to close the dialog
-    className: PropTypes.string
-};
+
+
+
+export const DialogContext=({context,children})=>{
+    return <ReactDialogContextImpl.Provider value={context||globalContext}>
+        {children}
+    </ReactDialogContextImpl.Provider>
+}
+
+/**
+ * new style dialog usage
+ * @param closeCb
+ */
+export const useDialog=(closeCb)=>{
+    const [dialogContent,setDialog]=useState(undefined);
+    const dialogId=useRef(1);
+    const lastContent=useRef(undefined);
+    const setNewDialog=(content,opt_closeCb,opt_options,opt_id)=>{
+        return new Promise((resolve,reject)=> {
+            window.requestAnimationFrame(() => {
+                const currentContent=lastContent.current;
+                if (content) {
+                    if (currentContent) {
+                        if (currentContent.close) currentContent.close();
+                        //we will not call the global close callback
+                    }
+                    dialogId.current++;
+                    const newValues={content: content, close: opt_closeCb, id: dialogId.current, options: opt_options};
+                    setDialog(newValues);
+                    lastContent.current=newValues;
+                    const id=dialogId.current;
+                    resolve(() => {
+                        //as the resturned function can be called any time
+                        //later we need to check if this is still the expected dialog
+                        //that we are going to close
+                        setNewDialog(undefined,undefined,undefined,id);
+                    });
+                } else {
+                    if (currentContent && (opt_id === undefined || currentContent.id === opt_id)) {
+                        if (currentContent.close) currentContent.close();
+                        if (closeCb) closeCb();
+                        setDialog(undefined)
+                        lastContent.current = undefined;
+                    }
+                    resolve();
+                }
+            });
+        });
+    };
+    return [
+        () => {
+            if (!dialogContent || !dialogContent.content) return null;
+            const {dialogClassName,coverClassName}=dialogContent.options||{}
+            return (
+                <OverlayDialog
+                    dialogClassName={dialogClassName}
+                    coverClassName={coverClassName}
+                >
+                    <dialogContent.content/>
+                </OverlayDialog>
+
+            )
+        }
+        ,
+        (content,opt_closeCb,opt_options)=>{
+            return setNewDialog(content,opt_closeCb,opt_options);
+        }
+    ]
+}
+export const showPromiseDialog=(dialogContext,Dialog,args,opt_options)=>{
+    if (!dialogContext) dialogContext=globalContext;
+    return new Promise((resolve,reject)=>{
+        let resolved=false;
+        showDialog(dialogContext,()=>{
+            return <Dialog {...args} resolveFunction={(val)=>{
+                resolved=true;
+                resolve(val);
+                return true;
+            }} />
+        },()=>{
+            //give the resolve a chance to win
+            window.setTimeout(()=> {
+                if (!resolved) reject();
+            },0);
+        },opt_options);
+    })
+}
+export const showDialog=(opt_dialogContext,dialog,opt_cancelCallback,opt_options)=>{
+    if (opt_dialogContext){
+        if (! opt_dialogContext.showDialog){
+            if(opt_dialogContext.current && opt_dialogContext.current.showDialog)
+                opt_dialogContext=opt_dialogContext.current;
+            else
+                opt_dialogContext=undefined;
+        }
+    }
+    if (! opt_dialogContext) {
+        const cancel=()=>{
+            if (window.avnavAndroid && window.avnavAndroid.dialogClosed){
+                window.avnavAndroid.dialogClosed();
+            }
+            if (opt_cancelCallback) opt_cancelCallback();
+        }
+        return globalContext.showDialog(dialog,cancel,opt_options);
+    }
+    else return opt_dialogContext.showDialog(dialog,opt_cancelCallback,opt_options);
+}
+
+
+export const promiseResolveHelper = ({ok, err}, resolveFunction, ...args) => {
+    let rt = resolveFunction(...args);
+    if (rt instanceof Promise) {
+        rt.then(() => ok && ok())
+            .catch((e) => {
+                err && err(e)
+            })
+        return;
+    }
+    if (rt) ok && ok();
+    else err && err();
+}
+
 
 export const DialogFrame=(props)=>{
     let classNameS="";
@@ -79,6 +210,16 @@ export const DialogFrame=(props)=>{
         {children}
     </div>
 }
+export const DialogText=({className,children})=>{
+    return <div className={concatsp(className,"dialogText")}>
+        {children}
+    </div>
+}
+export const DialogRow=forwardRef(({className,onClick,children},ref)=>{
+    return <div className={concatsp(className,"dialogRow")} ref={ref} onClick={onClick}>
+        {children}
+    </div>
+})
 DialogFrame.propTypes={
     className: PropTypes.string,
     title: PropTypes.string,
@@ -88,16 +229,26 @@ DialogFrame.propTypes={
 
 export const DialogButtons=(props)=>{
     const {className,children,buttonList,...fw}=props;
-    return <div {...fw} className={"dialogButtons "+((className!==undefined)?className:"")}>
-        {buttonList?buttonList.map((button)=>{
-            return <DialogButton {...button} key={button.name}>{button.label||button.name}</DialogButton>
-        }):null}
+    let buttons=buttonList;
+    if (! (buttons instanceof Array)) buttons=[buttons];
+    return <div {...fw} className={Helper.concatsp("dialogButtons",className)}>
+        {buttons.map((button)=>{
+            if (! button) return null;
+            if (typeof(button) === 'function'){
+                const El=button;
+                return <El/>
+            }
+            const label=button.label?button.label:button.name.substring(0,1).toUpperCase()+button.name.substring(1);
+            return <DialogButton {...button} key={button.name}>
+                {label}
+            </DialogButton>
+        })}
         {children}
     </div>
 }
 DialogButtons.propTypes={
     className: PropTypes.string,
-    buttonList: PropTypes.array
+    buttonList: PropTypes.oneOfType([PropTypes.array,PropTypes.object])
 }
 /**
  * helper for dialogButtonList
@@ -109,544 +260,4 @@ export const DBOk=(onClick,props)=>{
     return {close: true,name:'ok',onClick:onClick,label:'Ok',...props};
 }
 
-
-const DIALOG_Z=120;
-const DialogContextImpl=createContext({
-    closeDialog:()=>{},
-    showDialog:(dialog,opt_cancelCallback,opt_timeout)=>{},
-    zIndex: DIALOG_Z
-});
-export const useDialogContext=()=>useContext(DialogContextImpl);
-export const DialogContext=({closeDialog,showDialog,zIndex,children})=>{
-    return <DialogContextImpl.Provider value={{
-        closeDialog:closeDialog?closeDialog:()=>{},
-        showDialog: showDialog?showDialog:()=>{},
-        zIndex: zIndex!==undefined?zIndex:DIALOG_Z
-    }}>
-        {children}
-    </DialogContextImpl.Provider>
-}
-
-/**
- * new style dialog usage
- * @param closeCb
- */
-export const useDialog=(closeCb)=>{
-    const [dialogContent,setDialog]=useState(undefined);
-    const dialogId=useRef(1);
-    const Display=InputMonitor(OverlayDialog);
-    return [
-        () => {
-            if (!dialogContent || !dialogContent.content) return null;
-            const ownId=dialogId.current;
-            return (
-                <Display closeCallback={() => {
-                    if (dialogContent &&  ownId === dialogContent.id) {
-                        setDialog(undefined);
-                        if (closeCb) closeCb();
-                        if (dialogContent.close) dialogContent.close();
-                    }
-                    else{
-                        console.log("deferred close");
-                    }
-                }}>
-                    <dialogContent.content/>
-                </Display>
-
-            )
-        }
-        ,
-        (content,opt_closeCb)=>{
-            if (content){
-                dialogId.current++;
-                if (dialogContent && dialogContent.content){
-                    if (dialogContent.close) dialogContent.close();
-                    //we will not call the global close callback
-                }
-                setDialog({content:content,close:opt_closeCb,id:dialogId.current});
-            }
-            else {
-                if (dialogContent && dialogContent.current && dialogContent.id === dialogId.current){
-                    if (dialogContent.close) dialogContent.close();
-                    if (closeCb) closeCb();
-                }
-                setDialog(undefined)
-            }
-        }
-    ]
-}
-
-
-/* =================================================================================================
-   legacy dialog handling
-   =================================================================================================*/
-
-export const dialogDisplay=(Content,closeCallback)=>{
-    let Display=InputMonitor(OverlayDialog);
-    return(
-        <Display
-            className="nested"
-            closeCallback={closeCallback}
-        >
-            <Content/>
-        </Display>
-    );
-}
-
-/**
- * a helper that will add dialog functionality to a component
- * it will maintain a variable inside the component state that holds the dialog
- * and it will wrap the render method to render the dialog if it is set
- * it exposes a couple of methods to control the dialog
- * normally you will instantiate it in the constructor like
- *    this.dialogHelper=dialogHelper(this);
- * and later you will use it like
- *    this.dialogHelper.showDialog((props)=>return <div>HelloDialog</div>);
- * @param thisref - the react component
- * @param stateName
- * @param opt_closeCallback - callback when dialog is closed
- * @returns {*}
- */
-export const dialogHelper=(thisref,stateName,opt_closeCallback)=>{
-    if (! stateName) stateName="dialog";
-    let rt={
-        showDialog:(Dialog)=>{
-            let state={};
-            state[stateName]=(props)=>{
-                return(
-                    <Dialog
-                        {...props}
-                        closeCallback={()=>{
-                            rt.hideDialog();
-                        }}
-                    />
-                )
-            };
-            thisref.setState(state);
-        },
-        hideDialog:()=>{
-            let state={};
-            state[stateName]=undefined;
-            thisref.setState(state);
-            notifyClosed();
-            if (opt_closeCallback) opt_closeCallback();
-        },
-        filterState:(state)=>{
-            let rt=assign({},state);
-            delete rt[stateName];
-            return rt;
-        },
-        getRender(){
-            if (!thisref.state[stateName]) return null;
-            return dialogDisplay(thisref.state[stateName],()=>{
-                this.hideDialog()
-            });
-        },
-        isShowing(){
-            return !!thisref.state[stateName];
-        }
-    };
-    rt.showDialog=rt.showDialog.bind(rt);
-    rt.hideDialog=rt.hideDialog.bind(rt);
-    rt.filterState=rt.filterState.bind(rt);
-    rt.getRender=rt.getRender.bind(rt);
-    let originalRender=thisref.render;
-    let newRender=()=>{
-        return <React.Fragment>
-            {rt.getRender()}
-            {originalRender.call(thisref)}
-        </React.Fragment>
-    };
-    thisref.render=newRender.bind(thisref);
-    return rt;
-};
-
-/**
- * handler for a global dialog
- */
-let CBId=new Helper.idGen();
-let DId=new Helper.idGen();
-let globalDialogs=[];
-
-let globalDialogCallbacks={}
-
-const addGlobalDialog=(dialog,opt_cancel,opt_timeout)=>{
-    let id=DId.next();
-    let entry={dialog:dialog,cancel:opt_cancel,id:id};
-    if (opt_timeout){
-        entry.timer=window.setTimeout(()=>{
-            removeGlobalDialog(id);
-        },opt_timeout);
-    }
-    globalDialogs.forEach((de)=>{
-        if (de.cancel) de.cancel();
-        if (de.timer !== undefined) window.clearTimeout(de.timer);
-    });
-    globalDialogs=[];
-    if (dialog) globalDialogs.push(entry);
-    for (let k in globalDialogCallbacks){
-        globalDialogCallbacks[k](dialog,()=>removeDialog(id,true));
-    }
-    return id;
-}
-const removeGlobalDialog=(id,opt_omitCancel)=>{
-    let idx=-1;
-    for (let i=0;i<globalDialogs.length;i++){
-        if (globalDialogs[i].id===id){
-            idx=i;
-            break;
-        }
-    }
-    if (idx < 0) return false;
-    if (globalDialogs[idx].cancel && ! opt_omitCancel) globalDialogs[idx].cancel();
-    if (globalDialogs[idx].timer !== undefined) window.clearTimeout(globalDialogs[idx].timer);
-    globalDialogs.splice(idx,1);
-    if (globalDialogs.length < 1){
-        //we removed the last one
-        for (let k in globalDialogCallbacks){
-            globalDialogCallbacks[k](undefined);
-        }
-        notifyClosed();
-    }
-
-}
-const addCb=(callback)=>{
-    let id=CBId.next();
-    globalDialogCallbacks[id]=callback;
-    if (globalDialogs.length < 1 ){
-        callback();
-    }
-    else {
-        callback(globalDialogs[globalDialogs.length - 1].dialog,()=>removeGlobalDialog(globalDialogs[globalDialogs.length - 1].id));
-    }
-    return id;
-}
-const removeCb=(id)=>{
-    delete globalDialogCallbacks[id];
-}
-
-export const GlobalDialogDisplay=(props)=>{
-    const [DDisplay,setDialog]=useDialog(props.closeCallback);
-    useEffect(() => {
-        let id=addCb((dialog,closeCb)=>{
-            setDialog(dialog,closeCb);
-        });
-        return ()=>removeCb(id);
-    }, []);
-    return <DDisplay {...props}/>
-}
-
-
-const notifyClosed=()=>{
-    if (window.avnav.android && window.avnav.android.dialogClosed){
-        window.avnav.android.dialogClosed();
-    }
-}
-/**
- *
- * @param key
- * @param opt_cancelCallback this will be called if the dialog
- *        is removed from "outside"
- */
-const addDialog=(content,opt_cancelCallback,opt_timeout)=> {
-    return addGlobalDialog(content,opt_cancelCallback,opt_timeout);
-};
-
-const removeDialog=(key,opt_omitCancel)=> {
-    return removeGlobalDialog(key,opt_omitCancel);
-};
-
-const removeAll=()=>{
-    addGlobalDialog();
-};
-
-
-
-
-
-
-                                            //"active input" to prevent resizes
-const Dialogs = {
-    /**
-     * create a select dialog component
-     * this method will not directly show the dialog
-     * @param title
-     * @param list
-     * @param okCallback
-     * @param cancelCallback
-     * @param optResetCallback
-     * @return {Function}
-     */
-    createSelectDialog: (title,list,okCallback,cancelCallback,optResetCallback)=> {
-        return (props)=> {
-            return (
-                <div className="selectDialog inner">
-                    <h3 className="dialogTitle">{title || ''}</h3>
-                    <div className="selectList">
-                        {list.map(function(elem){
-                            return(
-                                <div className={"listEntry "+(elem.selected && 'selectedItem')}
-                                     onClick={function(){
-                                        if (okCallback) okCallback(elem);
-                                        if (props.closeCallback) props.closeCallback();
-                                    }}
-                                     key={elem.value+":"+elem.label}
-                                    >{elem.label}</div>);
-                        })}
-                    </div>
-                    <div className="dialogButtons">
-                        {optResetCallback && <DB
-                            name="reset"
-                            onClick={(ev)=>{
-                                if (props.closeCallback) props.closeCallback();
-                                optResetCallback(ev);
-                            }}
-                        >Reset</DB>}
-                        <DB name="cancel"
-                                onClick={(ev)=>{
-                                    if (props.closeCallback) props.closeCallback();
-                                    if (cancelCallback) cancelCallback(ev);
-                                }}
-                            >Cancel</DB>
-                    </div>
-                </div>
-            );
-
-        };
-    },
-    /**
-     * create a value dialog component
-     * this method will not show the dialog directly
-     * @param title
-     * @param value
-     * @param okCallback
-     * @param cancelCallback
-     * @param opt_label
-     * @return {Dialog}
-     */
-    createValueDialog:(title,value,okCallback,cancelCallback,opt_label) =>{
-        class Dialog extends React.Component{
-            constructor(props){
-                super(props);
-                this.state={value:value};
-                this.valueChanged=this.valueChanged.bind(this);
-            }
-            valueChanged(event) {
-                this.setState({value: event.target.value});
-            }
-            render () {
-                return (
-                    <div className="inner">
-                        <h3 className="dialogTitle">{title || 'Input'}</h3>
-                        <div>
-                            <div className="dialogRow">
-                                <span className="inputLabel">{opt_label}</span>
-                                <input type="text" name="value" value={this.state.value} onChange={this.valueChanged}/>
-                            </div>
-                        </div>
-                        <div className="dialogButtons">
-                            <DB name="cancel" onClick={cancelCallback}>Cancel</DB>
-                            <DB name="ok" onClick={() => okCallback(this.state.value)}>Ok</DB>
-                        </div>
-                    </div>
-                );
-            }
-        };
-        return Dialog;
-    },
-
-    createConfirmDialog: (text,okFunction,cancelFunction,opt_title) =>{
-        return (props)=> {
-            return (
-                <div className="inner">
-                    <h3 className="dialogTitle">{opt_title || ''}</h3>
-
-                    <div className="dialogText">{text}</div>
-                    <div className="dialogButtons">
-                        <DB name="cancel" onClick={() => {
-                            if (cancelFunction) cancelFunction();
-                            if (props.closeCallback) props.closeCallback();
-                        }}>Cancel</DB>
-                        <DB name="ok" onClick={() => {
-                            if (okFunction) okFunction();
-                            if (props.closeCallback) props.closeCallback();
-                        }}>Ok</DB>
-                    </div>
-                </div>
-            );
-        };
-    },
-
-
-    createAlertDialog: function(text,okFunction){
-        return (props)=>{
-            return (
-                <div className="inner">
-                    <h3 className="dialogTitle">Alert</h3>
-
-                    <div className="dialogText">{text}</div>
-                    <div className="dialogButtons">
-                        <DB name="ok" onClick={okFunction}>Ok</DB>
-                    </div>
-                </div>
-            );
-        }
-
-    },
-
-
-    /**
-     * show an alert message with close button
-     * @param text
-     * @param opt_parent if set the HTML parent element
-     * @returns {Promise}
-     */
-    alert: function (text, opt_parent) {
-        return new Promise(function (resolve, reject) {
-            let id;
-            const okFunction = ()=> {
-                removeDialog(id,true);
-                resolve();
-            };
-            id=addDialog(Dialogs.createAlertDialog(text,okFunction),()=> {
-                    resolve();
-                });
-        });
-    },
-    /**
-     * show a confirmation dialog
-     * @param {string} text
-     * @param  opt_parent if set the dialog parent
-     * @param {string} opt_title if set the title
-     * @returns {Promise}
-     */
-    confirm: function (text, opt_parent, opt_title) {
-        return new Promise(function (resolve, reject) {
-            const okFunction = ()=> {
-                resolve(1);
-            };
-            const cancelFunction = ()=> {
-                reject();
-            };
-            let html = Dialogs.createConfirmDialog(text,okFunction,cancelFunction,opt_title);
-            addDialog(html,()=> {
-                    reject();
-                });
-        });
-
-    },
-    /**
-     * a simple input value dialog
-     * @param {string} title the title text to be displayed
-     * @param {string} value the initial value
-     * @param {function} okCallback the callback when OK is clicked, value as parameter
-     *                   return false to keep the dialog open
-     *                   the callback will receive an asynchronous close function as
-     *                   second parameter
-     * @param opt_parent if set the parent HTML element
-     * @param opt_label if set an additional label
-     * @param opt_cancelCallback - if set a callback function being invoked on cancel
-     * @returns {*|OverlayDialog}
-     */
-    valueDialog: function (title, value, okCallback, opt_parent, opt_label, opt_cancelCallback) {
-        let id;
-        const ok = (value)=> {
-            removeDialog(id,true);
-            okCallback(value);
-        };
-        const cancel = ()=> {
-            if (removeDialog(id,true) && opt_cancelCallback) opt_cancelCallback();
-        };
-        let html= Dialogs.createValueDialog(title, value, ok, cancel, opt_label);
-        id=addDialog(html,()=> {
-                if (opt_cancelCallback) opt_cancelCallback();
-            });
-    },
-    /**
-     * create a value dialog as a promise
-     * this will always fullfill if the user clicks ok
-     * to implement checking and asynchronous close use the valueDialog method
-     * @param title
-     * @param value
-     * @param opt_parent
-     * @param opt_label
-     * @returns {Promise}
-     */
-    valueDialogPromise: function (title, value, opt_parent, opt_label) {
-        let id;
-        return new Promise(function (resolve, reject) {
-            let Dialog = Dialogs.createValueDialog(title, value, (value)=> {
-                removeDialog(id,true);
-                resolve(value);
-                return true;
-            }, ()=> {
-                removeDialog(id,true);
-                reject();
-            }, opt_label);
-            id=addDialog(Dialog,()=> {
-                    reject();
-                });
-        })
-    },
-    /**
-     * create a value dialog as a promise
-     * this will always fullfill if the user clicks ok
-     * to implement checking and asynchronous close use the valueDialog method
-     * @param title
-     * @param list
-     * @param opt_parent
-     * @returns {Promise}
-     */
-    selectDialogPromise: function (title, list, opt_parent) {
-        return new Promise(function (resolve, reject) {
-            let Dialog = Dialogs.createSelectDialog(title, list, (value)=> {
-                resolve(value);
-            }, ()=> {
-                reject();
-            });
-            addDialog(Dialog,()=> {
-                        reject();
-                    });
-        })
-    },
-    /**
-     * create an arbitrary dialog
-     * it will provide a closeCallback property to the html
-     * by calling this function the dialog will be dismissed
-     * @param html the react class to show (or the html string)
-     * @param opt_parent
-     * @param opt_cancelCallback a callback to be invoked if the dialog is closed from outside
-     * @param opt_timeout if set - auto dismiss the dialog after opt_timeout ms
-     * @returns dialogId
-     */
-    dialog: function (html, opt_parent,opt_cancelCallback,opt_timeout) {
-        return addDialog(html,opt_cancelCallback,opt_timeout);
-    },
-
-    hide: function(){
-        removeAll();
-    },
-
-
-
-};
-
-
-export const InfoItem=(props)=>{
-    return <div className={"dialogRow "+props.className}>
-        <span className={"inputLabel"}>{props.label}</span>
-        <span className={"itemInfo"}>{props.value}</span>
-    </div>
-}
-
-InfoItem.show=(data,description)=>{
-    let v=data[description.value];
-    if (v === undefined) return null;
-    if (description.formatter){
-        v=description.formatter(v,data);
-        if (v === undefined) return null;
-    }
-    return <InfoItem label={description.label} value={v}/>
-}
-export default Dialogs;
 

@@ -1746,7 +1746,7 @@ def main(argv):
     if outname is None or outname == "":
       #try again as we could have a / at the end
       dummy,outname=os.path.split(dummy)
-    outname=re.compile('\.[^.]*$').sub("",outname)
+    outname=re.compile(r'\.[^.]*$').sub("",outname)
   if outname is None or outname == "":
     print("cannot use empty name as outname")
     sys.exit(1)
@@ -1811,6 +1811,8 @@ def main(argv):
     log("copying %s to %s"%(tmpgemf,outname))
     outtmp=outname+".tmp"
     try:
+      if not os.path.isdir(os.path.dirname(outtmp)):
+        os.mkdir(os.path.dirname(outtmp))
       shutil.copy(tmpgemf,outtmp)
       os.replace(outtmp,outname)
       os.unlink(tmpgemf)

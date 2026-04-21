@@ -2,16 +2,21 @@
  * Created by andreas on 02.05.14.
  */
 
-import Dynamic from '../hoc/Dynamic.jsx';
-import Button from '../components/Button.jsx';
+import Dynamic from '../hoc/Dynamic.tsx';
 import ItemList from '../components/ItemList.jsx';
 import globalStore from '../util/globalstore.jsx';
 import keys from '../util/keys.jsx';
-import React from 'react';
+import React, {useEffect} from 'react';
 import Page from '../components/Page.jsx';
 import Toast from '../components/Toast.jsx';
-import Requests from '../util/requests.js';
-import OverlayDialog from '../components/OverlayDialog.jsx';
+import Requests, {prepareUrl} from '../util/requests.js';
+import {
+    DBCancel, DBOk,
+    DialogButtons,
+    DialogFrame,
+    showDialog,
+    showPromiseDialog
+} from '../components/OverlayDialog.jsx';
 import GuiHelpers from '../util/GuiHelpers.js';
 import Mob from '../components/Mob.js';
 import EditHandlerDialog from "../components/EditHandlerDialog";
@@ -24,6 +29,8 @@ import PropTypes from 'prop-types';
 import Helper from "../util/helper";
 import GuiHelper from "../util/GuiHelpers";
 import {StatusItem} from '../components/StatusItems';
+import {AlertDialog, ConfirmDialog} from "../components/BasicDialogs";
+import {useDialogContext} from "../components/exports";
 
 class Notifier{
     constructor() {
@@ -46,69 +53,59 @@ class Notifier{
     }
 }
 
-class DebugDialog extends React.Component{
-    constructor(props) {
-        super(props);
-        this.state={
-            isDebug:false,
-            pattern:'',
-            timeout:60
-        };
-        this.save=this.save.bind(this);
-    }
-    componentDidMount() {
-        Requests.getJson('',undefined,{
-            request:'currentloglevel'
+const DebugDialog=(props)=> {
+    const [isDebug,setDebug]=React.useState(false);
+    const [pattern,setPattern]=React.useState('');
+    const [timeout,setTimeout]=React.useState(60);
+    const dialogContext=useDialogContext();
+    useEffect(()=> {
+        Requests.getJson({
+            request: 'api',
+            type: 'config',
+            command: 'currentLogLevel'
         })
-            .then((data)=>{
-                let ns={};
-                ns.isDebug=(data.level && data.level.match(/debug/i));
-                ns.pattern=data.filter||'';
-                this.setState(ns);
+            .then((data) => {
+                setDebug(data.level && data.level.match(/debug/i));
+                setPattern(data.filter || '');
             })
-            .catch((e)=>Toast(e))
-    }
+            .catch((e) => Toast(e))
+    },[]);
 
-    save(){
-        Requests.getJson('',undefined,{
-            request:'debuglevel',
-            level: this.state.isDebug?'debug':'info',
-            timeout:this.state.timeout,
-            filter:this.state.pattern ||''
+    const save=()=> {
+        Requests.getJson({
+            request: 'api',
+            type: 'config',
+            command: 'loglevel',
+            level: isDebug ? 'debug' : 'info',
+            timeout: timeout,
+            filter: pattern || ''
         })
-            .then(()=>this.props.closeCallback())
-            .catch((e)=>Toast(e));
+            .then(() => dialogContext.closeDialog())
+            .catch((e) => Toast(e));
     }
-    render(){
-        return <div className="selectDialog DebugDialog">
-            <h3 className="dialogTitle">{this.props.title||'Enable/Disable Debug'}</h3>
+        return <DialogFrame className="selectDialog DebugDialog" title={props.title||'Enable/Disable Debug'}>
             <Checkbox
                 dialogRow={true}
                 label={'debug'}
-                value={this.state.isDebug}
-                onChange={(nv)=>this.setState({isDebug:nv})}
+                value={isDebug}
+                onChange={(nv)=>setDebug(nv)}
                 />
             <Input
                 type={'number'}
                 label={'timeout(s)'}
                 dialogRow={true}
-                value={this.state.timeout}
-                onChange={(nv)=>this.setState({timeout:nv})}/>
+                value={timeout}
+                onChange={(nv)=>setTimeout(nv)}/>
             <Input
                 label={'pattern'}
                 dialogRow={true}
-                value={this.state.pattern}
-                onChange={(nv)=>this.setState({pattern:nv})}/>
-            <div className="dialogButtons">
-                <DB name={'cancel'}
-                    onClick={this.props.closeCallback}
-                >Cancel</DB>
-                <DB name={'ok'}
-                    onClick={this.save}>Ok</DB>
-            </div>
-        </div>
-    }
-
+                value={pattern}
+                onChange={(nv)=>setPattern(nv)}/>
+            <DialogButtons buttonList={[
+                DBCancel(),
+                DBOk(()=>save())
+                ]}/>
+        </DialogFrame>
 }
 
 
@@ -175,18 +172,21 @@ class StatusList extends React.Component{
         this.doQuery(undefined,data);
     }
     doQuery(sequence,focusItem){
-        let self=this;
-        Requests.getJson("?request=status",{checkOk:false}).then(
+        Requests.getJson({
+            request:'api',
+            type:'config',
+            command:'status'
+        }).then(
             (json)=>{
-                self.timer.guardedCall(sequence,()=> {
-                    self.queryResult(json,focusItem)
-                    self.timer.startTimer(sequence);
+                this.timer.guardedCall(sequence,()=> {
+                    this.queryResult(json,focusItem)
+                    this.timer.startTimer(sequence);
                 });
             },
             (error)=>{
                 this.timer.guardedCall(sequence,()=> {
-                    self.errors++;
-                    if (self.errors > 4) {
+                    this.errors++;
+                    if (this.errors > 4) {
                         let newState = {itemList: []};
                         newState.serverError = true;
                         if (this.props.onChange) {
@@ -194,7 +194,7 @@ class StatusList extends React.Component{
                         }
                         this.setState(newState);
                     }
-                    self.timer.startTimer(sequence);
+                    this.timer.startTimer(sequence);
                 });
             });
     }
@@ -252,7 +252,6 @@ StatusList.propTypes={
 class StatusPage extends React.Component{
     constructor(props){
         super(props);
-        let self=this;
         this.state={
             addresses:false,
             wpa:false,
@@ -260,11 +259,12 @@ class StatusPage extends React.Component{
             serverError:false,
             canRestart:false
         }
+        this.reloadHelper=GuiHelpers.storeHelperState(this,{reload:keys.gui.global.reloadSequence});
         this.reloadNotifier=new Notifier();
     }
     componentDidMount(){
         if (! globalStore.getData(keys.gui.capabilities.config)) return;
-        Requests.getJson('',undefined,{
+        Requests.getJson({
             request:'api',
             type:'config',
             command:'canRestart'
@@ -277,9 +277,9 @@ class StatusPage extends React.Component{
     componentWillUnmount(){
     }
     restartServer(){
-        OverlayDialog.confirm("really restart the AvNav server software?")
+        showPromiseDialog(undefined,(props)=><ConfirmDialog {...props} text={"really restart the AvNav server software?"}/>)
             .then((v)=>{
-                Requests.getJson('',undefined,{
+                Requests.getJson({
                     request:'api',
                     type:'config',
                     command:'restartServer'
@@ -307,12 +307,12 @@ class StatusPage extends React.Component{
                 {
                     name:'StatusAndroid',
                     visible: props.android,
-                    onClick:()=>{avnav.android.showSettings();}
+                    onClick:()=>{window.avnavAndroid.showSettings();}
                 },
                 {
                     name:'AndroidBrowser',
                     visible: props.android && this.state.addresses,
-                    onClick:()=>{avnav.android.launchBrowser();}
+                    onClick:()=>{window.avnavAndroid.launchBrowser();}
                 },
 
                 {
@@ -326,13 +326,18 @@ class StatusPage extends React.Component{
                     name: 'StatusShutdown',
                     visible: !props.android && this.state.shutdown && props.connected,
                     onClick:()=>{
-                        OverlayDialog.confirm("really shutdown the server computer?").then(function(){
-                            Requests.getJson("?request=command&start=shutdown").then(
+                        showPromiseDialog(undefined, (props)=><ConfirmDialog {...props} text={"really shutdown the server computer?"}/>).then(function(){
+                            Requests.getJson({
+                                request:'api',
+                                type:'command',
+                                command:'runCommand',
+                                name:'shutdown'
+                            }).then(
                                 (json)=>{
                                     Toast("shutdown started");
                                 },
                                 (error)=>{
-                                    OverlayDialog.alert("unable to trigger shutdown: "+error);
+                                    showDialog(undefined,()=><AlertDialog text={"unable to trigger shutdown: "+error}/>);
                                 });
 
                         })
@@ -348,10 +353,13 @@ class StatusPage extends React.Component{
                     name: 'StatusLog',
                     visible: props.log,
                     onClick: ()=>{
-                        OverlayDialog.dialog((props)=>{
+                        showDialog(undefined,(props)=>{
                             return <LogDialog
                                 {...props}
-                                baseUrl={globalStore.getData(keys.properties.navUrl)+"?request=download&type=config"}
+                                baseUrl={prepareUrl({
+                                    type:'config',
+                                    command:'download',
+                                }) }
                                 title={'AvNav Log'}
                             />
                         });
@@ -362,7 +370,7 @@ class StatusPage extends React.Component{
                     name: 'StatusDebug',
                     visible: props.debugLevel && props.connected,
                     onClick: ()=>{
-                        OverlayDialog.dialog(DebugDialog);
+                        showDialog(undefined,DebugDialog);
                     },
                     overflow: true
                 },

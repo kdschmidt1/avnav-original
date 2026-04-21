@@ -2,7 +2,7 @@
  * Created by andreas on 23.02.16.
  */
 
-import React, {useEffect} from "react";
+import React, {useEffect, useRef} from "react";
 import PropTypes from 'prop-types';
 import keys from '../util/keys.jsx';
 import routeobjects from '../nav/routeobjects.js';
@@ -11,6 +11,7 @@ import WaypointItem from './WayPointItem.jsx';
 import RouteEdit,{StateHelper} from '../nav/routeeditor.js';
 import GuiHelper from '../util/GuiHelpers.js';
 import {WidgetFrame, WidgetProps} from "./WidgetBase";
+import {injectav} from "../util/helper";
 
 const editor=new RouteEdit(RouteEdit.MODES.EDIT);
 
@@ -20,12 +21,12 @@ const RoutePoint=(showLL)=>{
     }
 }
 const RoutePointsWidget = (props) => {
-    let listRef = undefined;
+    let listRef = useRef();
     const scrollSelected = () => {
-        if (!listRef) return;
-        let el = listRef.querySelector('.activeEntry');
+        if (!listRef.current) return;
+        let el = listRef.current.querySelector('.activeEntry');
         if (el) {
-            let mode = GuiHelper.scrollInContainer(listRef, el);
+            let mode = GuiHelper.scrollInContainer(listRef.current, el);
             if (mode < 1 || mode > 2) return;
             el.scrollIntoView(mode == 1);
         }
@@ -46,9 +47,15 @@ const RoutePointsWidget = (props) => {
                     return RoutePoint(props.showLatLon)
                 }}
                 scrollable={true}
-                onItemClick={(item) => {
-                    if (props.onClick)
-                        props.onClick(new routeobjects.RoutePoint(item))
+                onItemClick={(ev) => {
+                    if (props.onClick) {
+                        const avev = injectav(ev);
+                        if (avev.avnav.item) {
+                            avev.avnav.point=new routeobjects.RoutePoint(avev.avnav.item)
+                            delete avev.avnav.item; //let the container fill this
+                            props.onClick(avev);
+                        }
+                    }
                 }}
                 onClick={(ev) => {
                     if (props.isEditing && props.onClick) {
@@ -56,7 +63,7 @@ const RoutePointsWidget = (props) => {
                     }
                 }}
                 listRef={(element) => {
-                    listRef = element
+                    listRef.current = element
                 }}
             />
         </WidgetFrame>
@@ -65,8 +72,9 @@ const RoutePointsWidget = (props) => {
 
 
 RoutePointsWidget.propTypes={
+    //onClick: add an avnav.point property for the clicked route point
     ...WidgetProps,
-    route:          PropTypes.objectOf(routeobjects.Route),
+    route:          PropTypes.instanceOf(routeobjects.Route),
     isActive:       PropTypes.bool,
     index:          PropTypes.number,
     showLatLon:     PropTypes.bool,

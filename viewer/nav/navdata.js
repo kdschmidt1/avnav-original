@@ -16,7 +16,7 @@ import Average, {CourseAverage} from "../util/average.mjs";
 import navcompute from "./navcompute";
 import AisData from './aisdata';
 
-const activeRoute=new RouteEdit(RouteEdit.MODES.ACTIVE);
+const activeRoute=new RouteEdit(RouteEdit.MODES.ACTIVE,true);
 
 class Callback{
     constructor(callback){
@@ -52,9 +52,6 @@ const NavData=function(){
      * @type {AisData|exports|module.exports}
      */
     this.routeHandler=new RouteData();
-
-
-    this.aisMode=navobjects.AisCenterMode.GPS;
 
     this.speedAverage=new Average(10); //for steady detection
     this.mapAverageCog=new CourseAverage(globalStore.getData(keys.properties.courseAverageLength)); //for map rotation
@@ -101,6 +98,7 @@ NavData.prototype.computeValues=function() {
             markerXte: keys.nav.wp.xte,
             markerVmg: keys.nav.wp.vmg,
             markerWp: keys.nav.wp.position,
+            markerServer: keys.nav.wp.server,
             anchorDirection: keys.nav.anchor.direction,
             anchorDistance: keys.nav.anchor.distance,
             anchorWatchDistance: keys.nav.anchor.watchDistance,
@@ -123,6 +121,9 @@ NavData.prototype.computeValues=function() {
     let gps = globalStore.getMultiple(this.storeKeys);
     //copy the marker to data to make it available extern
     data.markerWp = activeRoute.getCurrentTarget();
+    if (data.markerWp){
+        data.markerServer=activeRoute.isServerLeg();
+    }
     data.routeNextWp = activeRoute.getNextWaypoint();
     let maplatlon=globalStore.getData(keys.map.centerPosition,new navobjects.Point(0,0));
     let rstart = activeRoute.getCurrentFrom();
@@ -198,7 +199,7 @@ NavData.prototype.computeValues=function() {
         data.directionMode=boatDirectionMode;
         if (mapUseHdx) mapCourse=this.mapAverageHdm.val();
     }
-    if (globalStore.getData(keys.properties.boatSteadyDetect) && data.directionMode === 'cog'){
+    if (globalStore.getData(keys.properties.boatSteadyDetect)){
         let maxSpeed=parseFloat(globalStore.getData(keys.properties.boatSteadyMax)) * navcompute.NM / 3600.0;
         if (this.speedAverage.val() === undefined || this.speedAverage.val() < maxSpeed){
             data.isSteady=true;
@@ -240,32 +241,22 @@ NavData.prototype.computeValues=function() {
 
 /**
  * get the center for AIS queries
- * @returns {navobjects.Point}
+ * @returns {[navobjects.Point]}
  */
 NavData.prototype.getAisCenter=function(){
-    if (this.aisMode == navobjects.AisCenterMode.NONE) return undefined;
-    if (this.aisMode == navobjects.AisCenterMode.GPS) {
+    const mode=globalStore.getData(keys.properties.aisCenterMode);
+    if (mode === 'boat') {
         if (globalStore.getData(keys.nav.gps.valid)) return [globalStore.getData(keys.nav.gps.position)];
         return undefined;
     }
-    else{
-        if (globalStore.getData(keys.nav.gps.valid)){
+    else if (mode === 'map') {
+        return [globalStore.getData(keys.map.centerPosition)];
+    }
+    if (globalStore.getData(keys.nav.gps.valid)){
             return [globalStore.getData(keys.map.centerPosition),globalStore.getData(keys.nav.gps.position)]
-        }
     }
     return [globalStore.getData(keys.map.centerPosition)];
 };
-
-/**
- * set the mode for the AIS query
- * @param {navobjects.AisCenterMode} mode
- */
-NavData.prototype.setAisCenterMode=function(mode){
-    this.aisMode=mode;
-};
-
-
-
 
 /**
  * get the routing handler
@@ -284,8 +275,8 @@ NavData.prototype.getGpsHandler=function(){
 };
 
 
-NavData.prototype.resetTrack=function(){
-    return this.trackHandler.resetTrack();
+NavData.prototype.resetTrack=function(opt_cleanServer){
+    return this.trackHandler.resetTrack(opt_cleanServer);
 };
 
 

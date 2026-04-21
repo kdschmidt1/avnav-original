@@ -1,6 +1,6 @@
-import React from 'react';
+import React, {Children, cloneElement, forwardRef, useCallback, useEffect, useRef, useState} from 'react';
 import PropTypes from 'prop-types';
-import Headline from './Headline.jsx';
+import Headline from './Headline.tsx';
 import ButtonList from './ButtonList.jsx';
 import {hideToast} from '../components/Toast.jsx';
 import WidgetFactory from './WidgetFactory.jsx';
@@ -8,9 +8,12 @@ import globalStore from '../util/globalstore.jsx';
 import keys from '../util/keys.jsx';
 import KeyHandler from '../util/keyhandler.js';
 import AlarmHandler from '../nav/alarmhandler.js';
-import Dynamic from '../hoc/Dynamic.jsx';
-import GuiHelpers from "../util/GuiHelpers";
+import {useTimer} from "../util/GuiHelpers";
 import assign from 'object-assign';
+import Helper from "../util/helper";
+import {useStore} from "../hoc/Dynamic";
+import {DialogDisplay} from "./OverlayDialog";
+import {useDialogContext} from "./DialogContext";
 
 const alarmClick =function(){
     let alarms=globalStore.getData(keys.nav.alarms.all,"");
@@ -21,92 +24,120 @@ const alarmClick =function(){
     }
 };
 
-class Page extends React.Component {
-    constructor(props){
-        super(props);
-        this.alarmWidget=WidgetFactory.createWidget({name:'Alarm'});
-        this.userEvent=this.userEvent.bind(this);
-        this.timerCallback=this.timerCallback.bind(this);
-        this.timer=GuiHelpers.lifecycleTimer(this,this.timerCallback,1000,true);
-        this.lastUserAction=(new Date()).getTime();
-        this.state={
-            hideButtons:false,
-            connectionLost:globalStore.getData(keys.nav.gps.connectionLost)
+export const PageFrame=forwardRef((iprops,ref)=>{
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const {autoHideButtons,hideCallback,children,className,isEditing,id,buttonList,small,editingChanged,windowDimensions,...forward}=useStore(iprops,{
+        storeKeys:{
+            isEditing: keys.gui.global.layoutEditing
         }
-        GuiHelpers.storeHelper(this,(data)=>{
-            this.setState(data)
-        },{connectionLost: keys.nav.gps.connectionLost});
-    }
-    timerCallback(sequence){
-        if (this.props.autoHideButtons !== undefined){
-            let now=(new Date()).getTime();
+    });
+    useEffect(() => {
+        if (editingChanged) editingChanged(isEditing);
+    }, [isEditing]);
+    useEffect(() => {
+        KeyHandler.setPage(id);
+        return ()=>hideToast();
+    }, []);
+    const lastUserEvent=useRef(Helper.now());
+    const [hidden,setHidden]=useState(false);
+    useEffect(() => {
+        if (hideCallback) hideCallback(hidden);
+    },[hidden]);
+    const timer=useTimer((sequence)=>{
+        if (autoHideButtons !== undefined && ! isEditing){
+            let now=Helper.now();
             if (globalStore.getData(keys.gui.global.hasActiveInputs)){
-                this.lastUserAction=now;
+                lastUserEvent.current=now;
             }
-            if (! this.state.hideButtons) {
-                if (this.lastUserAction < (now - this.props.autoHideButtons)) {
-                    this.setState({hideButtons: true})
-                    if (this.props.buttonWidthChanged) this.props.buttonWidthChanged();
+            if (! hidden) {
+                if (lastUserEvent.current < (now - autoHideButtons)) {
+                    setHidden(true);
                 }
             }
         }
-        this.timer.startTimer(sequence);
-    }
-    userEvent(ev){
-        this.lastUserAction=(new Date()).getTime();
-        if (this.state.hideButtons && ev.type === 'click'){
-            window.setTimeout(()=>{
-                this.setState({hideButtons:false});
-                if (this.props.buttonWidthChanged) this.props.buttonWidthChanged();
-            },1);
+        timer.startTimer(sequence);
+    },1000,true);
+    const userEvent=useCallback((ev)=>{
+        lastUserEvent.current=Helper.now();
+        if (hidden && ev && ev.type === 'click'){
+            setHidden(false);
         }
-    }
-    render() {
-        let props=this.props;
-        let className = "page";
-        let hideButtons=this.state.hideButtons && props.autoHideButtons;
-        if (hideButtons) className+=" hiddenButtons";
-        if (props.isEditing) className+=" editing";
-        if (props.className) className += " " + props.className;
-        let Alarm=this.alarmWidget;
-        return <div className={className} id={props.id} style={props.style}
-                    onClick={this.userEvent}
-                    onTouchMove={this.userEvent}
-                    onTouchStart={this.userEvent}
-                    onMouseMove={this.userEvent}
-                    onWheel={this.userEvent}
+    },[hideCallback,hidden]);
+    let cl=Helper.concatsp("page",
+        className,
+        hidden?"hiddenButtons":undefined,
+        isEditing?"editing":undefined
+        )
+    return <div
+                ref={ref}
+                className={cl}
+                id={id}
+                {...forward}
+                onClick={userEvent}
+                onTouchMove={userEvent}
+                onTouchStart={userEvent}
+                onMouseMove={userEvent}
+                onWheel={userEvent}
+    >
+        {Children.map(children,(child)=> {
+            if (child) return cloneElement(child, {buttonsHidden: hidden && !!autoHideButtons })
+            return null;
+            }
+        )}
+    </div>
+})
+
+PageFrame.propTypes={
+    className: PropTypes.string,
+    autoHideButtons: PropTypes.number,
+    hideCallback: PropTypes.func,
+    editingChanged: PropTypes.func,
+    id: PropTypes.string.isRequired
+}
+
+export const PageLeft=({className,title,children})=>{
+    const Alarm=useCallback(WidgetFactory.createWidget({name:'Alarm'}),[])
+    return <div className={Helper.concatsp("leftPart","dialogAnchor", className)}
+            >
+            {title ? <Headline title={title} connectionLost={true}/> : null}
+            <DialogDisplay/>
+            {children}
+            <Alarm onClick={alarmClick}/>
+
+        </div>
+}
+PageLeft.propTypes = {
+    className: PropTypes.string,
+    title: PropTypes.string
+}
+
+const Page=forwardRef((props,ref)=>{
+        return <PageFrame
+            className={props.className}
+            id={props.id}
+            style={props.style}
+            autoHideButtons={props.autoHideButtons}
+            hideCallback={props.buttonWidthChanged}
+            ref={ref}
             >
             {props.floatContent && props.floatContent}
-            <div className="leftPart">
-                {props.title ? <Headline title={props.title} connectionLost={this.state.connectionLost}/> : null}
+            <PageLeft title={props.title}>
                 {props.mainContent ? props.mainContent : null}
                 {props.bottomContent ? props.bottomContent : null}
-                <Alarm onClick={alarmClick}/>
-            </div>
+            </PageLeft>
             <ButtonList
+                page={props.id}
                 itemList={props.buttonList}
                 widthChanged={props.buttonWidthChanged}
-                hidden={hideButtons}
-                shadeCallback={this.userEvent}
-                showShade={globalStore.getData(keys.properties.showButtonShade)}
             />
-        </div>
-    }
-    componentDidMount(){
-        KeyHandler.setPage(this.props.id);
-    }
-    componentWillUnmount(){
-        hideToast();
-    }
-
-}
+        </PageFrame>
+});
 
 Page.pageProperties={
     className: PropTypes.string,
     style: PropTypes.object,
     options: PropTypes.object,
     location: PropTypes.string.isRequired,
-    history: PropTypes.object.isRequired,
     small: PropTypes.bool.isRequired
 }
 Page.propTypes=assign({},Page.pageProperties,{
@@ -115,11 +146,12 @@ Page.propTypes=assign({},Page.pageProperties,{
     mainContent: PropTypes.any,
     floatContent: PropTypes.any,
     bottomContent: PropTypes.any,
-    buttonList: PropTypes.any,
+    buttonList: PropTypes.array,
     style: PropTypes.object,
-    isEditing: PropTypes.bool,
     buttonWidthChanged: PropTypes.func,
-    autoHideButtons: PropTypes.any // number of ms or undefined
+    autoHideButtons: PropTypes.any, // number of ms or undefined
+    windowDimensions: PropTypes.any,
+    history: PropTypes.object
 });
 
 

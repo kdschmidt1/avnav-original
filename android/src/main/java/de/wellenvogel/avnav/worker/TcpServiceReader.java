@@ -14,6 +14,7 @@ import de.wellenvogel.avnav.util.NmeaQueue;
  * Created by andreas on 25.12.14.
  */
 public class TcpServiceReader extends SingleConnectionHandler {
+    static final String ST_ADDR="address";
     String serviceType;
     public static class Description{
         String serviceType;
@@ -42,7 +43,13 @@ public class TcpServiceReader extends SingleConnectionHandler {
     };
 
     private EditableParameter.StringListParameter servicesParameter=
-            new EditableParameter.StringListParameter("service", R.string.labelSettingsSelectService,null);
+            new EditableParameter.StringListParameter("service", R.string.labelSettingsSelectService,null){
+                @Override
+                void init() {
+                    super.init();
+                    existingUnchecked=true;
+                }
+            };
 
 
     private TcpServiceReader(String name, GpsService ctx, NmeaQueue queue,String typeName) throws JSONException {
@@ -73,12 +80,15 @@ public class TcpServiceReader extends SingleConnectionHandler {
     public void run(int startSequence) throws JSONException, IOException {
         String target=servicesParameter.fromJson(parameters);
         while (! shouldStop(startSequence)) {
+            status.unsetChildStatus(ST_ADDR);
             InetSocketAddress address=resolveService(serviceType,target,startSequence,true);
             if (address == null){
                 setStatus(WorkerStatus.Status.ERROR,"unable to resolve "+target);
+                status.unsetChildStatus(ST_ADDR);
                 sleep(3000);
                 continue;
             }
+            status.setChildStatus(ST_ADDR, WorkerStatus.Status.NMEA,address.toString());
             IpConnection con = new IpConnection(address, gpsService);
             runInternal(con, startSequence);
         }

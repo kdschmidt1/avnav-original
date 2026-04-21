@@ -16,12 +16,14 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation"
         tools:targetApi="31" />
-    <!-- xwalkold only -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <queries>
         <package android:name="de.wellenvogel.ochartsprovider${suffix}" />
@@ -104,21 +106,8 @@
 
         <service
             android:name="de.wellenvogel.avnav.worker.GpsService"
-            android:foregroundServiceType="location"
+            android:foregroundServiceType="connectedDevice|location"
             android:label="AvnavGps" />
-
-        <provider
-            android:name="de.wellenvogel.avnav.fileprovider.AssetsProvider"
-            android:authorities="${applicationId}.assetsprovider"
-            android:exported="false"
-            android:grantUriPermissions="true" >
-        </provider>
-        <provider
-            android:name="de.wellenvogel.avnav.fileprovider.UserFileProvider"
-            android:authorities="${applicationId}.userprovider"
-            android:exported="false"
-            android:grantUriPermissions="true" >
-        </provider>
 
     </application>
 

@@ -4,45 +4,67 @@
 
 import globalStore from '../util/globalstore.jsx';
 import keys from '../util/keys.jsx';
-import React from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import MapPage,{overlayDialog} from '../components/MapPage.jsx';
 import Toast from '../components/Toast.jsx';
 import NavHandler from '../nav/navdata.js';
-import OverlayDialog, {dialogDisplay} from '../components/OverlayDialog.jsx';
-import Helper from '../util/helper.js';
-import GuiHelpers from '../util/GuiHelpers.js';
-import MapHolder from '../map/mapholder.js';
+import {
+    DBCancel,
+    DialogButtons, DialogFrame, DialogRow,
+    DialogText, OverlayContainer, showDialog, showPromiseDialog
+} from '../components/OverlayDialog.jsx';
+import Helper, {injectav} from '../util/helper.js';
+import {
+    useKeyEventHandlerPlain,
+    useStoreHelper,
+    useTimer
+} from '../util/GuiHelpers.js';
+import MapHolder, {EventTypes, LOCK_MODES} from '../map/mapholder.js';
 import navobjects from '../nav/navobjects.js';
 import ButtonList from '../components/ButtonList.jsx';
-import WayPointDialog from '../components/WaypointDialog.jsx';
+import WayPointDialog, {updateWaypoint} from '../components/WaypointDialog.jsx';
 import RouteEdit,{StateHelper} from '../nav/routeeditor.js';
 import LayoutHandler from '../util/layouthandler.js';
 import LayoutFinishedDialog from '../components/LayoutFinishedDialog.jsx';
-import EditWidgetDialog from '../components/EditWidgetDialog.jsx';
+import {EditWidgetDialogWithFunc} from '../components/EditWidgetDialog.jsx';
 import EditPageDialog from '../components/EditPageDialog.jsx';
 import anchorWatch, {AnchorWatchKeys, isWatchActive} from '../components/AnchorWatchDialog.jsx';
 import Mob from '../components/Mob.js';
 import Dimmer from '../util/dimhandler.js';
-import FeatureInfoDialog from "../components/FeatureInfoDialog";
-import {TrackConvertDialog} from "../components/TrackInfoDialog";
+import {CenterActionButton, GuardedFeatureListDialog, hideAction, linkAction} from "../components/FeatureInfoDialog";
+import {TrackConvertDialog} from "../components/TrackConvertDialog";
 import FullScreen from '../components/Fullscreen';
 import DialogButton from "../components/DialogButton";
 import RemoteChannelDialog from "../components/RemoteChannelDialog";
-import {InputReadOnly} from "../components/Inputs";
 import assign from 'object-assign';
 import WidgetFactory from "../components/WidgetFactory";
 import ItemList from "../components/ItemList";
-import mapholder from "../map/mapholder.js";
-import Page from "../components/Page";
-import Dialogs from "../components/OverlayDialog.jsx";
+import Page, {PageFrame, PageLeft} from "../components/Page";
 import Requests from "../util/requests";
-import DB from "../components/DialogButton";
+import {AisInfoWithFunctions} from "../components/AisInfoDisplay";
+import MapEventGuard from "../hoc/MapEventGuard";
+import {
+    BoatFeatureInfo,
+    FeatureAction,
+    FeatureInfo, RouteFeatureInfo, WpFeatureInfo
+} from "../map/featureInfo";
+import {Measure} from "../nav/routeobjects";
+import {KeepFromMode} from "../nav/routedata";
+import {ConfirmDialog} from "../components/BasicDialogs";
+import navdata from "../nav/navdata.js";
+import base from "../base";
+import {showErrorList} from "../components/ErrorListDialog";
+import {useHistory} from "../components/HistoryProvider";
+import {createItemActions} from "../components/FileDialog";
+import {PAGEIDS} from "../util/pageids";
+import {useDialogContext} from "../components/DialogContext";
 
 const RouteHandler=NavHandler.getRoutingHandler();
 
 const activeRoute=new RouteEdit(RouteEdit.MODES.ACTIVE);
+const editorRoute = new RouteEdit(RouteEdit.MODES.EDIT);
 
-const PAGENAME='navpage';
+const PAGENAME=PAGEIDS.NAV;
 
 
 
@@ -68,10 +90,10 @@ const getPanelWidgets=(panel)=>{
  * @param item
  * @param idx if undefined - just update the let "to" point
  */
-const startWaypointDialog=(item,idx)=>{
+const startWaypointDialog=(item,idx,dialogCtx)=>{
     if (! item) return;
-    const wpChanged=(newWp,close)=>{
-        let changedWp=WayPointDialog.updateWaypoint(item,newWp,(err)=>{
+    const wpChanged=(newWp)=>{
+        let changedWp=updateWaypoint(item,newWp,(err)=>{
             Toast(Helper.escapeHtml(err));
         });
         if (changedWp) {
@@ -85,61 +107,46 @@ const startWaypointDialog=(item,idx)=>{
         }
         return false;
     };
-    let RenderDialog=function(props){
-        return <WayPointDialog
+    showDialog(dialogCtx,(props)=><WayPointDialog
             {...props}
             waypoint={item}
             okCallback={wpChanged}/>
-    };
-    OverlayDialog.dialog(RenderDialog);
+    );
 };
-
-const setBoatOffset=()=>{
-    if (! globalStore.getData(keys.nav.gps.valid)) return;
-    let pos=globalStore.getData(keys.nav.gps.position);
-    if (! pos) return;
-    let ok=MapHolder.setBoatOffset(pos);
-    return ok;
-}
-const showLockDialog=()=>{
-    const LockDialog=(props)=>{
+const showLockDialog=(dialogContext)=>{
+    const LockDialog=()=>{
         return <div className={'LockDialog inner'}>
             <h3 className="dialogTitle">{'Lock Boat'}</h3>
             <div className={'dialogButtons'}>
                 <DialogButton
                     name={'current'}
                     onClick={()=>{
-                        props.closeCallback();
-                        if (!setBoatOffset()) return;
-                        MapHolder.setGpsLock(true);
+                        MapHolder.setGpsLock(LOCK_MODES.current);
                     }}
                 >
                     Current</DialogButton>
                 <DialogButton
                     name={'center'}
                     onClick={()=>{
-                        props.closeCallback();
-                        MapHolder.setBoatOffset();
-                        MapHolder.setGpsLock(true);
+                        MapHolder.setGpsLock(LOCK_MODES.center);
                     }}
                 >
                     Center
                 </DialogButton>
                 <DialogButton
                     name={'cancel'}
-                    onClick={()=>props.closeCallback()}
                 >
                     Cancel
                 </DialogButton>
             </div>
         </div>
     }
-    OverlayDialog.dialog(LockDialog);
+    showDialog(dialogContext,LockDialog);
 }
 
 const setCenterToTarget=()=>{
-    MapHolder.setGpsLock(false);
-    if (globalStore.getData(keys.nav.anchor.watchDistance) !== undefined){
+    MapHolder.setGpsLock(LOCK_MODES.off);
+    if (activeRoute.anchorWatch() !== undefined){
         MapHolder.setCenter(activeRoute.getCurrentFrom());
     }
     else {
@@ -149,7 +156,7 @@ const setCenterToTarget=()=>{
 
 const navNext=()=>{
     if (!activeRoute.hasRoute() ) return;
-    RouteHandler.wpOn(activeRoute.getNextWaypoint())
+    wpOn(activeRoute.getNextWaypoint(),KeepFromMode.OLDTO);
 };
 
 const navToWp=(on)=>{
@@ -163,251 +170,381 @@ const navToWp=(on)=>{
             wp.name=current.name;
         }
         else{
-            wp.name = 'Marker';
+            wp.name = globalStore.getData(keys.properties.markerDefaultName);
         }
         wp.routeName=undefined;
         center.assign(wp);
-        RouteHandler.wpOn(wp);
+        wpOn(wp);
         return;
     }
     RouteHandler.routeOff();
     MapHolder.triggerRender();
 };
+const wpOn=(...args)=>{
+    RouteHandler.wpOn(...args).then(
+        ()=>{},
+        (e)=>{if (e) Toast(e)})
+}
+const gotoFeature=(featureInfo,opt_noRoute)=>{
+    let target = featureInfo.point;
+    if (!target) return;
+    if (opt_noRoute && target instanceof navobjects.WayPoint) {
+        target=target.clone()
+        delete target.routeName;
+    }
+    if (! target.name) target.name=globalStore.getData(keys.properties.markerDefaultName);
+    wpOn(target);
+}
 const OVERLAYPANEL="overlay";
-class MapWidgetsDialog extends React.Component{
-    constructor(props) {
-        super(props);
-        this.state={
-            items:this.getCurrent()
-        };
-        this.sequence=GuiHelpers.storeHelper(this,()=>{
-            this.setState({items:this.getCurrent()})
-        },[keys.gui.global.layoutSequence]);
-    }
-
-    getCurrent() {
-        let current = getPanelWidgets(OVERLAYPANEL);
-        let idx = 0;
-        let rt = [];
-        if (! current.list) return rt;
-        current.list.forEach((item) => {
-            rt.push(assign({index: idx}, item));
-            idx++;
-        })
-        return rt;
-    }
-    onItemClick(item){
-        EditWidgetDialog.createDialog(item,PAGENAME,OVERLAYPANEL,{fixPanel:true,types:['map']});
-    }
-    render(){
-        return <div className={'MapWidgetsDialog'}>
-            <h2>Map Widgets</h2>
-            {this.state.items && this.state.items.map((item)=>{
+const getCurrentMapWidgets=() =>{
+    let current = getPanelWidgets(OVERLAYPANEL);
+    let idx = 0;
+    let rt = [];
+    if (! current.list) return rt;
+    current.list.forEach((item) => {
+        rt.push(assign({index: idx}, item));
+        idx++;
+    })
+    return rt;
+}
+const MapWidgetsDialog =()=> {
+    const dialogContext=useDialogContext();
+    const onItemClick = useCallback((item)=>{
+        dialogContext.showDialog(()=><EditWidgetDialogWithFunc
+            widgetItem={item}
+            panelname={OVERLAYPANEL}
+            pageWithOptions={PAGENAME}
+            opt_options={{fixPanel:true,types:['map']}}
+        />)
+    },[]);
+    const items=getCurrentMapWidgets();
+    return <DialogFrame className={'MapWidgetsDialog'} title={"Map Widgets"}>
+            {items && items.map((item)=>{
                 let theItem=item;
-                return <div className={'dialogRow listEntry'}
-                    onClick={()=>this.onItemClick(theItem)}
-                >{item.name}</div>
+                return <DialogRow
+                    className={'lisEntry'}
+                    onClick={()=>onItemClick(theItem)}
+                    key={theItem.name}
+                    >
+                    {item.name}
+                </DialogRow>
             })}
-            <div className={'dialogButtons'}>
-                <DialogButton
-                    name={'add'}
-                    onClick={()=>EditWidgetDialog.createDialog(undefined,PAGENAME,OVERLAYPANEL,{fixPanel:true,types:['map']})}
-                    >Add</DialogButton>
-                <DialogButton
-                    name={'cancel'}
-                    onClick={this.props.closeCallback}
-                >Close</DialogButton>
-            </div>
-        </div>
-    }
+        <DialogButtons buttonList={[
+            {
+                name:'add',
+                onClick:()=>{
+                    dialogContext.showDialog(()=><EditWidgetDialogWithFunc
+                        widgetItem={undefined}
+                        pageWithOptions={PAGENAME}
+                        panelname={OVERLAYPANEL}
+                        opt_options={{fixPanel:true,types:['map']}}
+                    />)
+                    },
+                close: false
+            },
+            {
+                name:'cancel',
+                label:'Close'
+            }
+        ]}/>
+    </DialogFrame>
 }
 
-class NavPage extends React.Component{
-    constructor(props){
-        super(props);
-        let self=this;
-        this.getButtons=this.getButtons.bind(this);
-        this.mapEvent=this.mapEvent.bind(this);
-        this.state={
-            showWpButtons: false,
-            sequence: 0
-        };
-        this.showWpButtons=this.showWpButtons.bind(this);
-        this.widgetClick=this.widgetClick.bind(this);
-        this.sequence=GuiHelpers.storeHelper(this,()=>{
-            MapHolder.triggerRender();
-        },[keys.gui.global.layoutSequence]);
-        globalStore.storeData(keys.map.measurePosition,undefined);
-        this.waypointButtons=[
-            anchorWatch(),
-            {
-                name:'WpLocate',
-                onClick:()=>{
-                    self.wpTimer.startTimer();
-                    setCenterToTarget();
-                    this.showWpButtons(false);
-                }
+const GuardedAisDialog=MapEventGuard(AisInfoWithFunctions);
+const OverlayContent=({showWpButtons,setShowWpButtons,dialogContext})=>{
+    const waypointButtons=[
+        anchorWatch(false,dialogContext),
+        {
+            name:'WpLocate',
+            onClick:()=>{
+                setCenterToTarget();
+                setShowWpButtons(false);
             },
-            {
-                name:'WpEdit',
-                onClick:()=>{
-                    if (activeRoute.hasRoute()){
-                        startWaypointDialog(activeRoute.getPointAt(),activeRoute.getIndex());
-                    }
-                    else {
-                        startWaypointDialog(activeRoute.getCurrentTarget());
-                    }
-                    this.showWpButtons(false);
-                },
-                storeKeys: {watchDistance:keys.nav.anchor.watchDistance},
-                updateFunction:(state)=>{
-                    return {visible:! (state.watchDistance !== undefined)}
-                },
-
-            },
-            {
-                name:'WpGoto',
-                storeKeys:activeRoute.getStoreKeys({watchDistance:keys.nav.anchor.watchDistance}),
-                updateFunction: (state)=> {
-                    return {visible: !StateHelper.selectedIsActiveTarget(state) && ! (state.watchDistance !== undefined)}
-                },
-                onClick:()=>{
-                    let selected=activeRoute.getPointAt();
-                    this.showWpButtons(false);
-                    if (selected) RouteHandler.wpOn(selected);
-                },
-
-
-            },
-            {
-                name:'NavNext',
-                storeKeys:activeRoute.getStoreKeys({watchDistance:keys.nav.anchor.watchDistance}),
-                updateFunction: (state)=> {
-                    return {visible:  StateHelper.selectedIsActiveTarget(state)
-                            &&  StateHelper.hasPointAtOffset(state,1)
-                            && ! (state.watchDistance !== undefined)
-                    };
-                },
-                onClick:()=>{
-                    self.showWpButtons(false);
-                    activeRoute.moveIndex(1);
-                    RouteHandler.wpOn(activeRoute.getPointAt());
-
-                }
-            },
-            {
-                name: 'NavRestart',
-                storeKeys: activeRoute.getStoreKeys({watchDistance:keys.nav.anchor.watchDistance}),
-                updateFunction: (state)=> {
-                    return {
-                        visible:  StateHelper.hasActiveTarget(state)
-                    };
-                },
-                onClick:()=>{
-                    self.showWpButtons(false);
-                    RouteHandler.legRestart();
-                }
-            },
-            {
-                name:'WpNext',
-                storeKeys:activeRoute.getStoreKeys({watchDistance:keys.nav.anchor.watchDistance}),
-                updateFunction: (state)=> {
-                    return {
-                        disabled:!StateHelper.hasPointAtOffset(state,1),
-                        visible: StateHelper.hasRoute(state) && ! (state.watchDistance !== undefined)
-                    };
-                },
-                onClick:()=>{
-                    self.wpTimer.startTimer();
-                    activeRoute.moveIndex(1);
-                    let next=activeRoute.getPointAt();
-                    MapHolder.setCenter(next);
-
-                }
-            },
-            {
-                name:'WpPrevious',
-                storeKeys:activeRoute.getStoreKeys({watchDistance:keys.nav.anchor.watchDistance}),
-                updateFunction: (state)=> {
-                    return {
-                        disabled:!StateHelper.hasPointAtOffset(state,-1),
-                        visible: StateHelper.hasRoute(state) && ! (state.watchDistance !== undefined)
-                    }
-                },
-                onClick:()=>{
-                    self.wpTimer.startTimer();
-                    activeRoute.moveIndex(-1);
-                    let next=activeRoute.getPointAt();
-                    MapHolder.setCenter(next);
-                }
+            storeKeys: activeRoute.getStoreKeys(),
+            updateFunction:(state)=>{
+                return { visible: StateHelper.hasActiveTarget(state) || StateHelper.anchorWatchDistance(state) !== undefined}
             }
-        ];
-        activeRoute.setIndexToTarget();
-        this.wpTimer=GuiHelpers.lifecycleTimer(this,()=>{
-            this.showWpButtons(false);
-        },globalStore.getData(keys.properties.wpButtonTimeout)*1000);
-        GuiHelpers.keyEventHandler(this,(component,action)=>{
-            if (action == "centerToTarget"){
-                return setCenterToTarget();
+        },
+        {
+            name:'WpEdit',
+            onClick:()=>{
+                if (activeRoute.hasRoute()){
+                    startWaypointDialog(activeRoute.getPointAt(),activeRoute.getIndex(),dialogContext);
+                }
+                else {
+                    startWaypointDialog(activeRoute.getCurrentTarget(),undefined,dialogContext);
+                }
+                setShowWpButtons(false);
+            },
+            storeKeys: activeRoute.getStoreKeys(),
+            updateFunction:(state)=>{
+                return {visible:StateHelper.hasActiveTarget(state) }
+            },
+
+        },
+        {
+            name:'WpGoto',
+            storeKeys:activeRoute.getStoreKeys(),
+            updateFunction: (state)=> {
+                return {visible: StateHelper.hasActiveTarget(state) &&  !StateHelper.selectedIsActiveTarget(state)}
+            },
+            onClick:()=>{
+                let selected=activeRoute.getPointAt();
+                setShowWpButtons(false);
+                if (selected) wpOn(selected);
+            },
+
+
+        },
+        {
+            name:'NavNext',
+            storeKeys:activeRoute.getStoreKeys(),
+            updateFunction: (state)=> {
+                return {visible:
+                        StateHelper.hasActiveTarget(state) &&  StateHelper.selectedIsActiveTarget(state)
+                        &&  StateHelper.hasPointAtOffset(state,1)
+                };
+            },
+            onClick:()=>{
+                setShowWpButtons(false);
+                navNext();
+
             }
-            if (action == "navNext"){
-                return navNext();
+        },
+        {
+            name: 'NavRestart',
+            storeKeys: activeRoute.getStoreKeys(),
+            updateFunction: (state)=> {
+                return {
+                    visible:  StateHelper.hasActiveTarget(state) &&  StateHelper.selectedIsActiveTarget(state)
+                };
+            },
+            onClick:()=>{
+                setShowWpButtons(false);
+                RouteHandler.legRestart();
             }
-            if (action == "toggleNav"){
-                navToWp(!activeRoute.hasActiveTarget())
+        },
+        {
+            name:'WpNext',
+            storeKeys:activeRoute.getStoreKeys(),
+            updateFunction: (state)=> {
+                return {
+                    disabled:!StateHelper.hasPointAtOffset(state,1),
+                    visible: StateHelper.hasRoute(state) && ! StateHelper.anchorWatchDistance(state)
+                };
+            },
+            onClick:()=>{
+                setShowWpButtons(true);
+                activeRoute.moveIndex(1);
+                let next=activeRoute.getPointAt();
+                MapHolder.setCenter(next);
+
             }
-        },"page",["centerToTarget","navNext","toggleNav"])
-        if (globalStore.getData(keys.properties.mapLockMode) === 'center'){
-            MapHolder.setBoatOffset();
+        },
+        {
+            name:'WpPrevious',
+            storeKeys:activeRoute.getStoreKeys(),
+            updateFunction: (state)=> {
+                return {
+                    disabled:!StateHelper.hasPointAtOffset(state,-1),
+                    visible: StateHelper.hasRoute(state) && ! StateHelper.anchorWatchDistance(state)
+                }
+            },
+            onClick:()=>{
+                setShowWpButtons(true);
+                activeRoute.moveIndex(-1);
+                let next=activeRoute.getPointAt();
+                MapHolder.setCenter(next);
+            }
         }
-        this.checkChartCount=30;
-        this.checkChartTimer=GuiHelpers.lifecycleTimer(this,(seq)=>{
-            let neededChart=this.needsChartLoad();
-            if (! neededChart){
-                this.checkChartTimer.startTimer(seq);
-                return;
+    ];
+
+    return <React.Fragment>
+        {showWpButtons?<ButtonList
+            itemList={waypointButtons}
+            className="overlayContainer"
+        />:null}
+        <ItemList
+            className={'mapWidgetContainer widgetContainer'}
+            itemCreator={(widget)=>{
+                let widgetConfig=WidgetFactory.findWidget(widget) || {};
+                let key=widget.key;
+                return WidgetFactory.createWidget(widget,
+                    {
+                        handleVisible:!globalStore.getData(keys.gui.global.layoutEditing),
+                        registerMap: (callback)=>MapHolder.registerMapWidget(
+                            PAGENAME,
+                            {
+                                name: key,
+                                storeKeys: widgetConfig.storeKeys
+                            },callback),
+                        triggerRender: ()=>MapHolder.triggerRender()
+                    }
+                )
+            }}
+            itemList={getPanelWidgets(OVERLAYPANEL).list || []}
+        />
+    </React.Fragment>
+}
+const needsChartLoad=()=>{
+    if (MapHolder.getCurrentChartEntry()) return;
+    return MapHolder.getLastChartKey()
+}
+const createRouteFeatureAction=(history,opt_fromMeasure)=>{
+    return new FeatureAction({
+        name:'ShowRoutePanel',
+        label: opt_fromMeasure?'To Route':'New Route',
+        onClick: (featureInfo,listCtx)=>{
+            let measure;
+            if (opt_fromMeasure){
+                measure=globalStore.getData(keys.map.activeMeasure);
+                if (!measure) return;
+                if (measure.points.length < 1) return;
             }
-            this.checkChartCount--;
-            if (this.checkChartCount < 0){
-                this.props.history.pop();
-                return;
-            }
-            Requests.getJson("?request=list&type=chart",{timeout:3*parseFloat(globalStore.getData(keys.properties.networkTimeout))}).
-                then((json)=>{
-                    this.checkChartTimer.startTimer(seq);
-                    (json.items||[]).forEach((chartEntry)=>{
-                        if (!chartEntry.key) chartEntry.key=chartEntry.chartKey||chartEntry.url;
-                        if (chartEntry.key === neededChart){
-                            mapholder.setChartEntry(chartEntry);
-                            this.setState({sequence:this.state.sequence+1});
-                        }
-                    })
-                })
-                .catch(()=>{this.checkChartTimer.startTimer(seq)});
-        },1000,true);
-    }
-    needsChartLoad(){
-        if (mapholder.getCurrentChartEntry()) return;
-        return mapholder.getLastChartKey()
-    }
-    widgetClick(item,data,panel,invertEditDirection){
+            const routeActions=createItemActions('route');
+            const createAction=routeActions.getCreateAction();
+            createAction.action(listCtx).then((newRoute)=>{
+                listCtx.closeDialog();
+                if (!measure) {
+                    newRoute.addPoint(0, featureInfo.point);
+                    editorRoute.setRouteAndIndex(newRoute, 0);
+                } else {
+                    const mRoute=measure.clone();
+                    mRoute.setName(newRoute.name);
+                    editorRoute.setRouteAndIndex(mRoute, mRoute.getIndexFromPoint(featureInfo.point))
+                }
+                history.push("editroutepage", {center: true});
+            })
+        },
+        close:false,
+        condition: (featureInfo)=>{
+            if (featureInfo.getType() === FeatureInfo.TYPE.waypoint) return false;
+            if (featureInfo.getType() === FeatureInfo.TYPE.boat) return false;
+            if (featureInfo.getType() === FeatureInfo.TYPE.anchor) return false;
+            if (featureInfo.getType() === FeatureInfo.TYPE.route && ! featureInfo.isOverlay) return false;
+            if (! featureInfo.validPoint()) return false;
+            if (opt_fromMeasure && (featureInfo.getType() !== FeatureInfo.TYPE.measure)) return false;
+            if (!opt_fromMeasure && (featureInfo.getType() === FeatureInfo.TYPE.measure)) return false;
+            return true;
+        }
+    })
+}
+const NavPage=(props)=>{
+    const dialogCtx=useDialogContext();
+    const [wpButtonsVisible,setWpButtonsVisible]=useState(false);
+    useStoreHelper(()=>MapHolder.triggerRender(),keys.gui.global.layoutSequence);
+    const [sequence,setSequence]=useState(0);
+    const checkChartCount=useRef(30);
+    const history=useHistory();
+    const loadTimer = useTimer((seq) => {
+        const neededChart=needsChartLoad();
+        if (!neededChart) return;
+        checkChartCount.current--;
+        if (checkChartCount.current < 0) {
+            history.pop();
+            return;
+        }
+        Requests.getJson({
+            request:'api',
+            type:'chart',
+            command:'list'
+        }, {timeout: 3 * parseFloat(globalStore.getData(keys.properties.networkTimeout))}).then((json) => {
+            (json.items || []).forEach((chartEntry) => {
+                if (chartEntry.name === neededChart.key) {
+                    MapHolder.setChartEntry(chartEntry);
+                    setSequence(sequence + 1);
+                    return;
+                }
+            })
+            loadTimer.startTimer(seq);
+        })
+            .catch(() => {
+                loadTimer.startTimer(seq)
+            });
+    }, 1000);
+    useEffect(() => {
+        globalStore.storeData(keys.map.activeMeasure,undefined);
+        activeRoute.setIndexToTarget();
+        /*if (globalStore.getData(keys.properties.mapLockMode) === 'center'){
+            MapHolder.setBoatOffset();
+        }*/
+        const neededChart = needsChartLoad();
+        if (neededChart) {
+            loadTimer.startTimer();
+        }
+        MapHolder.showEditingRoute(false);
+        return ()=>{
+            globalStore.storeData(keys.map.activeMeasure,undefined);
+        }
+    }, []);
+    const wpTimer=useTimer(()=>{
+            setWpButtonsVisible(false);
+        },globalStore.getData(keys.properties.wpButtonTimeout)*1000);
+    useKeyEventHandlerPlain("centerToTarget",'page', setCenterToTarget);
+    useKeyEventHandlerPlain("navNext",'page',navNext);
+    useKeyEventHandlerPlain("toggleNav",'page',()=>navToWp(!activeRoute.hasActiveTarget()));
+    useEffect(() => {
+        if (! globalStore.getData(keys.properties.aisShowErrors)) return;
+        if (LayoutHandler.isEditing()) return;
+        showErrorList({
+            dialogCtx:dialogCtx,
+            title: 'AIS Errors',
+            className: 'AisErrorDialog',
+            fillFunction: ()=>NavHandler.getAisHandler().getErrors()
+        });
+    }, []);
+    const showAisInfo=useCallback((mmsi)=>{
+        if (! mmsi) return;
+        showDialog(dialogCtx,()=>{
+            return <GuardedAisDialog
+                mmsi={mmsi}
+                actionCb={(action,m)=>{
+                    if (action === 'AisInfoList'){
+                        history.push('aispage', {mmsi: m});
+                    }
+                }}
+            />;
+        })
+    },[history]);
+    const showWpButtons=useCallback((on)=>{
+        if (on) {
+            wpTimer.startTimer();
+        }
+        else {
+            wpTimer.stopTimer();
+        }
+        if (wpButtonsVisible === on) return;
+        setWpButtonsVisible(on);
+    },[wpButtonsVisible]);
+    const widgetClick=useCallback((ev)=>{
+        const avev=injectav(ev);
+        const item=avev.avnav.item||{};
+        const panel=avev.avnav.panelName||"";
         let pagePanels=LayoutHandler.getPagePanels(PAGENAME);
         let idx=pagePanels.indexOf(OVERLAYPANEL);
         if (idx >=0){
             pagePanels.splice(idx,1);
         }
-        if (EditWidgetDialog.createDialog(item,PAGENAME,panel,{fixPanel:pagePanels,beginning:invertEditDirection,types:["!map"]})) return;
+        if (LayoutHandler.isEditing()) {
+            const invertEditDirection=avev.avnav.invertEditDirection;
+            showDialog(dialogCtx, () => <EditWidgetDialogWithFunc
+                widgetItem={item}
+                pageWithOptions={PAGENAME}
+                panelname={panel}
+                opt_options={{fixPanel: pagePanels, beginning: invertEditDirection, types: ["!map"]}}
+            />)
+            return;
+        }
         if (item.name == "AisTarget"){
-            let mmsi=(data && data.mmsi)?data.mmsi:item.mmsi;
-            if (! mmsi) return;
-            this.props.history.push("aisinfopage",{mmsi:mmsi});
+            let mmsi=avev.avnav.mmsi;
+            showAisInfo(mmsi);
             return;
         }
         if (item.name == "ActiveRoute"){
             if (!activeRoute.hasRoute()) return;
             activeRoute.setIndexToTarget();
             activeRoute.syncTo(RouteEdit.MODES.EDIT);
-            this.props.history.push("editroutepage");
+            history.push("editroutepage");
             return;
         }
         if (item.name == "Zoom"){
@@ -416,118 +553,168 @@ class NavPage extends React.Component{
         }
         if (panel && panel.match(/^bottomLeft/)){
             activeRoute.setIndexToTarget();
-            this.showWpButtons(true);
+            showWpButtons(true);
             return;
         }
-        this.props.history.push("gpspage",{widget:item.name});
+        history.push("gpspage",{widget:item.name});
 
-    };
-    showWpButtons(on){
-        if (on) {
-            this.wpTimer.startTimer();
-        }
-        else {
-            this.wpTimer.stopTimer();
-        }
-        this.setState({showWpButtons:on})
-    }
-    mapEvent(evdata){
-        console.log("mapevent: "+evdata.type);
-        if (evdata.type === MapHolder.EventTypes.SELECTAIS){
-            let aisparam=evdata.aisparam;
-            if (!aisparam) return;
-            if (aisparam.mmsi){
-                this.props.history.push('aisinfopage',{mmsi:aisparam.mmsi});
-                return true;
-            }
-            return;
-        }
-        if (evdata.type === MapHolder.EventTypes.FEATURE){
-            let feature=evdata.feature;
-            if (! feature) return;
-            feature.additionalActions=[];
-            feature.additionalInfoRows=[];
-            const showFeature=()=>{
-                if (feature.nextTarget && ! feature.activeRoute) {
-                    feature.additionalActions.push(
-                        {
-                            name: 'goto', label: 'Goto', onClick: () => {
-                                let target = feature.nextTarget;
-                                if (!target) return;
-                                let wp = new navobjects.WayPoint(target[0], target[1], feature.name);
-                                RouteHandler.wpOn(wp);
-                            }
-                        }
-                    );
+    },[history]);
+
+    const mapEvent = useCallback((evdata) => {
+        base.log("mapevent: " + evdata.type);
+        if (evdata.type === EventTypes.FEATURE) {
+            const featureList=evdata.feature;
+            const additionalActions = [];
+            additionalActions.push(new FeatureAction({
+                name:'StopNav',
+                label:'StopNav',
+                onClick:()=>{
+                    wpOn();
+                },
+                condition:(featureInfo)=>featureInfo instanceof WpFeatureInfo
+            }))
+            additionalActions.push(new FeatureAction({
+                name: 'goto',
+                label: 'Goto',
+                onClick: (featureInfo) => {
+                    gotoFeature(featureInfo,true);
+                },
+                condition: (featureInfo) => {
+                    return featureInfo.validPoint() &&
+                        !(featureInfo instanceof WpFeatureInfo ) &&
+                        ! (featureInfo instanceof BoatFeatureInfo)
                 }
-                FeatureInfoDialog.showDialog(this.props.history,feature);
-            }
-            if (feature.overlayType === 'route' && ! feature.activeRoute){
-                let currentRouteName=activeRoute.getRouteName();
-                if (Helper.getExt(currentRouteName) !== 'gpx') currentRouteName+='.gpx';
-                if (activeRoute.hasActiveTarget() && currentRouteName === feature.overlayName){
-                    //do not show a feature pop up if we have an overlay that exactly has the current route
-                    return false;
+            }));
+            additionalActions.push(new FeatureAction({
+                name: 'start',
+                label: 'Start',
+                onClick: (featureInfo) => {
+                    gotoFeature(featureInfo);
+                },
+                condition: (featureInfo) => {
+                    return featureInfo.validPoint() &&
+                        !(featureInfo instanceof WpFeatureInfo ) &&
+                        ! (featureInfo instanceof BoatFeatureInfo) &&
+                        (featureInfo instanceof RouteFeatureInfo)
                 }
-            }
-            if (feature.overlayType === 'track'){
-                feature.additionalActions.push({
-                   name:'toroute',
-                   label: 'Convert',
-                   onClick:(props)=>{
-                       TrackConvertDialog.showDialog(this.props.history, props.overlayName)
-                   }
-                });
-            }
-            if (feature.overlayType !== 'route' || ! feature.nextTarget){
-                showFeature()
-            } else {
-                let currentTarget=activeRoute.getCurrentTarget();
-                //show a "routeTo" if this is not the current target
-                if (! feature.activeRoute || ! currentTarget ||
-                    currentTarget.lon !== feature.nextTarget[0]||
-                    currentTarget.lat !== feature.nextTarget[1]
-                ) {
-                    feature.additionalActions.push({
-                        name: 'routeTo',
-                        label: 'Route',
-                        onClick: (props) => {
-                            RouteHandler.wpOn(props.routeTarget);
+            }));
+            additionalActions.push(new FeatureAction({
+                name:'center',
+                label:'Center',
+                onClick:(featureInfo)=>{
+                    if (MapHolder.getGpsLock()) return;
+                    MapHolder.setCenter(featureInfo.point);
+                    MapHolder.triggerRender();
+                },
+                condition: (featureInfo)=>{
+                    return featureInfo.validPoint();
+                }
+            }))
+            additionalActions.push(new FeatureAction({
+                name: 'toroute',
+                label: 'Convert',
+                onClick: (featureInfo) => {
+                    showDialog(dialogCtx, () => <TrackConvertDialog history={history}
+                                                                    name={featureInfo.urlOrKey}/>)
+                },
+                condition: (featureInfo) => featureInfo.getType() === FeatureInfo.TYPE.track
+            }));
+            additionalActions.push(new FeatureAction({
+                name: 'editRoute',
+                label: 'Edit',
+                onClick: (featureInfo) => {
+                    let nextTarget = featureInfo.point;
+                    if (!nextTarget) return;
+                    RouteHandler.fetchRoute(featureInfo.urlOrKey)
+                        .then((route) => {
+                            let idx = route.findBestMatchingIdx(nextTarget);
+                            editorRoute.setNewRoute(route, idx >= 0 ? idx : undefined);
+                            history.push("editroutepage",{center:true});
                         },
-                        condition: (props) => props.routeTarget
-                    });
-                }
-                feature.additionalActions.push({
-                    name:'editRoute',
-                    label:'Edit',
-                    onClick:()=>{
-                        RouteHandler.fetchRoute(feature.overlayName,false,
-                            (route)=>{
-                                let nextTarget= new navobjects.WayPoint(feature.nextTarget[0],feature.nextTarget[1])
-                                let idx=route.findBestMatchingIdx(nextTarget);
-                                let editor=new RouteEdit(RouteEdit.MODES.EDIT);
-                                editor.setNewRoute(route,idx >= 0?idx:undefined);
-                                this.props.history.push("editroutepage");
-                            },
-                            (error)=> {
-                                if (error) Toast(error);
-                            });
+                        (error) => {
+                            if (error) Toast(error);
+                        });
+                },
+                condition: (featureInfo) => featureInfo.getType() === FeatureInfo.TYPE.route && featureInfo.isOverlay
+            }));
+            additionalActions.push(new FeatureAction({
+                name: 'editRoute',
+                label: 'Edit',
+                onClick: (featureInfo) => {
+                    activeRoute.setNewIndex(activeRoute.getIndexFromPoint(featureInfo.point,true));
+                    activeRoute.syncTo(RouteEdit.MODES.EDIT);
+                    history.push("editroutepage",{center:true});
+                },
+                condition: (featureInfo) => featureInfo.getType() === FeatureInfo.TYPE.route && ! featureInfo.isOverlay
+            }));
+            additionalActions.push(createRouteFeatureAction(history,true));
+            additionalActions.push(new FeatureAction({
+                name: 'Delete',
+                label: 'Clean Track',
+                onClick:()=>{
+                    showPromiseDialog(dialogCtx,(dp)=><ConfirmDialog
+                        {...dp}
+                        title={'Empty Current Track'}
+                        text={'Clean current track data and rename files?'}
+                    />)
+                    .then(()=>navdata.resetTrack(true),()=>{})
+                },
+                condition:(featureInfo)=>featureInfo.getType() === FeatureInfo.TYPE.track && ! featureInfo.isOverlay && globalStore.getData(keys.properties.connectedMode)
+            }))
+            additionalActions.push(hideAction);
+            additionalActions.push(linkAction(history));
+            const listActions=[
+                new FeatureAction({
+                    name: 'goto',
+                    label: 'Goto',
+                    onClick: (featureInfo) => {
+                        gotoFeature(featureInfo);
+                    },
+                    condition: (featureInfo)=>featureInfo.validPoint() &&
+                        //could only be base boat or anchor
+                        featureInfo.getType() === FeatureInfo.TYPE.base
+
+                }),
+                createRouteFeatureAction(history)
+            ]
+            const measure=globalStore.getData(keys.map.activeMeasure);
+            listActions.push(new FeatureAction({
+                name: 'Measure',
+                label: (measure === undefined)?'Measure':'+ Measure',
+                onClick: (featureInfo)=>{
+                    if (MapHolder.getGpsLock()) return;
+                    let newMeasure;
+                    if (measure){
+                        newMeasure=measure.clone();
                     }
-                });
-                showFeature();
-            }
+                    else{
+                        newMeasure=new Measure('default');
+                    }
+                    newMeasure.addPoint(-99,featureInfo.point);
+                    MapHolder.setCenter(featureInfo.point);
+                    globalStore.storeData(keys.map.activeMeasure,newMeasure);
+                },
+                condition: ()=>!MapHolder.getGpsLock()
+            }))
+            listActions.push(new FeatureAction({
+                name: 'MeasureOff',
+                label: 'Measure',
+                onClick: ()=>{
+                    globalStore.storeData(keys.map.activeMeasure,undefined)
+                },
+                condition: ()=>globalStore.getData(keys.map.activeMeasure) !== undefined,
+                toggle: true
+            }))
+            showDialog(dialogCtx,(dprops)=><GuardedFeatureListDialog
+                {...dprops}
+                featureList={featureList}
+                additionalActions={additionalActions}
+                listActions={listActions}
+            />)
             return true;
         }
-    }
-    componentWillUnmount(){
-        globalStore.storeData(keys.map.measurePosition,undefined);
-        MapHolder.unregisterPageWidgets(PAGENAME);
-    }
-    componentDidMount(){
-        MapHolder.showEditingRoute(false);
-    }
-    getButtons(){
-        let rt=[
+    }, [history]);
+    const buttons=[
             {
                 name: "ZoomIn",
                 onClick:()=>{MapHolder.changeZoom(1)}
@@ -546,20 +733,21 @@ class NavPage extends React.Component{
                 },
                 onClick:()=>{
                     let old=globalStore.getData(keys.map.lockPosition);
-                    if (! old){
+                    let mapLockMode=LOCK_MODES.center;
+                    if (!old /*off or undefined*/){
                         let lockMode=globalStore.getData(keys.properties.mapLockMode,'center');
                         if ( lockMode === 'ask'){
-                            showLockDialog();
+                            showLockDialog(dialogCtx);
                             return;
                         }
                         if (lockMode === 'current'){
-                            if (! setBoatOffset()) return;
-                        }
-                        else{
-                            MapHolder.setBoatOffset();
+                            mapLockMode=LOCK_MODES.current;
                         }
                     }
-                    MapHolder.setGpsLock(!old);
+                    else{
+                        mapLockMode=LOCK_MODES.off;
+                    }
+                    MapHolder.setGpsLock(mapLockMode);
                 },
                 editDisable:true
             },
@@ -574,7 +762,7 @@ class NavPage extends React.Component{
                 },
                 editDisable: true
             },
-            anchorWatch(true),
+            anchorWatch(true,dialogCtx),
             {
                 name: "StopNav",
                 storeKeys: activeRoute.getStoreKeys(),
@@ -602,14 +790,14 @@ class NavPage extends React.Component{
                 onClick:()=>{
                     if (activeRoute.getIndex() < 0 ) activeRoute.setIndexToTarget();
                     activeRoute.syncTo(RouteEdit.MODES.EDIT);
-                    this.props.history.push("editroutepage");
+                    history.push("editroutepage");
                 },
                 overflow: true
 
             },
             {
                 name: "NavOverlays",
-                onClick:()=>overlayDialog(),
+                onClick:()=>overlayDialog(dialogCtx),
                 overflow: true,
                 storeKeys:{
                     visible:keys.gui.capabilities.uploadOverlays
@@ -637,27 +825,8 @@ class NavPage extends React.Component{
                 },
                 overflow: true
             },
-            {
-                name: 'Measure',
-                storeKeys: {
-                    toggle: keys.map.measurePosition,
-                    visible: keys.properties.showMeasure
-                },
-                overflow: true,
-                onClick: ()=>{
-                    let current=globalStore.getData(keys.map.measurePosition);
-                    if (current){
-                        globalStore.storeData(keys.map.measurePosition,undefined);
-                        MapHolder.triggerRender();
-                        return;
-                    }
-                    if (MapHolder.getGpsLock()) return;
-                    let center = globalStore.getData(keys.map.centerPosition);
-                    globalStore.storeData(keys.map.measurePosition,center);
-                    MapHolder.triggerRender();
-                }
-            },
-            Mob.mobDefinition(this.props.history),
+            CenterActionButton,
+            Mob.mobDefinition(history),
             EditPageDialog.getButtonDef(PAGENAME,
                 MapPage.PANELS,
                 [LayoutHandler.OPTIONS.SMALL,LayoutHandler.OPTIONS.ANCHOR]),
@@ -665,94 +834,68 @@ class NavPage extends React.Component{
                 name: 'NavMapWidgets',
                 editOnly: true,
                 overflow: true,
-                onClick: ()=>OverlayDialog.dialog((props)=><MapWidgetsDialog {...props}/>)
+                onClick: ()=>showDialog(dialogCtx,(props)=><MapWidgetsDialog {...props}/>)
             },
-            LayoutFinishedDialog.getButtonDef(),
+            LayoutFinishedDialog.getButtonDef(undefined,dialogCtx),
             LayoutHandler.revertButtonDef((pageWithOptions)=>{
-                if (pageWithOptions.location !== this.props.location){
-                    this.props.history.replace(pageWithOptions.location,pageWithOptions.options);
+                if (pageWithOptions.location !== props.location){
+                    history.replace(pageWithOptions.location,pageWithOptions.options);
                 }
             }),
-            RemoteChannelDialog({overflow:true}),
+            RemoteChannelDialog({overflow:true},dialogCtx),
             FullScreen.fullScreenDefinition,
             Dimmer.buttonDef(),
             {
                 name: 'Cancel',
-                onClick: ()=>{this.props.history.pop()}
+                onClick: ()=>{history.pop()}
             }
         ];
-        return rt;
-    }
-    registerMapWidget(widget,callback){
-        MapHolder.registerMapWidget(PAGENAME,widget,callback);
-    }
-    render(){
-        let self=this;
         let autohide=undefined;
-        if (globalStore.getData(keys.properties.autoHideNavPage) && ! this.state.showWpButtons && ! globalStore.getData(keys.gui.global.layoutEditing)){
+        if (globalStore.getData(keys.properties.autoHideNavPage) && ! wpButtonsVisible && ! globalStore.getData(keys.gui.global.layoutEditing)){
             autohide=globalStore.getData(keys.properties.hideButtonTime,30)*1000;
         }
-        let pageProperties=Helper.filteredAssign(MapPage.propertyTypes,self.props);
-        let neededChart=this.needsChartLoad();
+        let pageProperties=Helper.filteredAssign(MapPage.propertyTypes,props);
+        let neededChart=needsChartLoad();
         if (neededChart){
-            let Dialog=dialogDisplay((props)=>{
-                return (<div className="inner">
-                    <h3 className="dialogTitle">Waiting for chart</h3>
-
-                    <div className="dialogText">{neededChart}</div>
-                    <div className="dialogButtons">
-                        <DB name="cancel" onClick={()=>this.props.history.pop()}>Cancel</DB>
-                    </div>
-                </div>)
-                },
-                ()=>this.props.history.pop());
             return (
-                <Page
+                <PageFrame
                     {...pageProperties}
-                    id={PAGENAME}
-                    buttonList={self.getButtons()}
-                    mainContent={Dialog}
-                    />
+                    >
+                    <PageLeft >
+                        <OverlayContainer
+                            closeCallback={() => history.pop()}>
+                            <DialogFrame title={"Waiting for chart"}>
+                                <DialogText>{neededChart.name||neededChart.key}</DialogText>
+                                <DialogButtons buttonList={DBCancel({
+                                    onClick:()=>history.pop()
+                                })}/>
+                            </DialogFrame>
+                        </OverlayContainer>
+                    </PageLeft>
+                    <ButtonList page={pageProperties.id} itemList={buttons}/>
+                </PageFrame>
             );
         }
+
         return (
             <MapPage
                 {...pageProperties}
                 id={PAGENAME}
-                mapEventCallback={self.mapEvent}
-                onItemClick={self.widgetClick}
+                mapEventCallback={mapEvent}
+                onItemClick={widgetClick}
                 panelCreator={getPanelList}
-                overlayContent={ (props)=>
-                    <React.Fragment>
-                        {this.state.showWpButtons?<ButtonList
-                            itemList={self.waypointButtons}
-                            className="overlayContainer"
-                        />:null}
-                        <ItemList
-                            className={'mapWidgetContainer widgetContainer'}
-                            itemCreator={(widget)=>{
-                                let widgetConfig=WidgetFactory.findWidget(widget) || {};
-                                let key=widget.key;
-                                return WidgetFactory.createWidget(widget,
-                                    {
-                                        handleVisible:!globalStore.getData(keys.gui.global.layoutEditing),
-                                        registerMap: (callback)=>this.registerMapWidget({
-                                            name: key,
-                                            storeKeys: widgetConfig.storeKeys
-                                        },callback),
-                                        triggerRender: ()=>MapHolder.triggerRender()
-                                    }
-                                )
-                            }}
-                            itemList={getPanelWidgets(OVERLAYPANEL).list || []}
-                        />
-                    </React.Fragment>}
-                buttonList={self.getButtons()}
-                preventCenterDialog={(self.props.options||{}).remote}
+                overlayContent={ ()=>
+                    <OverlayContent
+                        showWpButtons={wpButtonsVisible}
+                        setShowWpButtons={(on)=>{
+                            showWpButtons(on);
+                        }}
+
+                    />}
+                buttonList={buttons}
                 autoHideButtons={autohide}
                 />
         );
-    }
 }
-
+NavPage.propTypes=Page.propTypes;
 export default NavPage;
